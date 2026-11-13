@@ -1,11 +1,11 @@
 // Command refcheck enforces the import boundaries of gofy-interface-api and of
 // a project's contract module.
 //
-// In library mode each directory is checked against the rules in §4.3: contracts
-// may import only the standard library and contracts/**; client/** additionally
-// allows contracts/** and client/**; client/nacos is the only client package
-// allowed to depend on gofy/support/nacos; adapter/gofy may use gofy, gin,
-// contracts and docsui (DocsModule exposes docsui.Config); docgen is limited to
+// In library mode each directory is checked against the rules in §4.3. The
+// library is framework independent: gofy and gin are denied everywhere, because
+// the gofy adapter and the Nacos resolver now live in gofy-interface-gofy.
+// contracts may import only the standard library and contracts/**; client/**
+// additionally allows contracts/** and client/**; docgen is limited to
 // contracts, kin-openapi and yaml; docsui is limited to swgui; cmd may import
 // anything inside the library. No Go file may declare init().
 //
@@ -15,12 +15,11 @@
 // out of the business contract layer, and init() is forbidden as well.
 // 命令 refcheck 校验 gofy-interface-api 与项目契约模块的分层边界。
 //
-// library 模式按 §4.3 逐目录检查：contracts 只允许标准库与 contracts/**；
-// client 增加 contracts/** 与 client/**；client/nacos 是唯一允许依赖
-// gofy/support/nacos 的客户端包；adapter/gofy 允许 gofy、gin、contracts 与
-// docsui（DocsModule 暴露 docsui.Config）；docgen 限于 contracts、kin-openapi
-// 与 yaml；docsui 限于 swgui；cmd 可 import 库内任意包。任何文件都不得声明
-// init()。
+// library 模式按 §4.3 逐目录检查。本库与框架无关：gofy 与 gin 在全库范围内
+// 禁止，因为 gofy adapter 与 Nacos resolver 已迁至 gofy-interface-gofy。
+// contracts 只允许标准库与 contracts/**；client 增加 contracts/** 与 client/**；
+// docgen 限于 contracts、kin-openapi 与 yaml；docsui 限于 swgui；cmd 可 import
+// 库内任意包。任何文件都不得声明 init()。
 //
 // contracts 模式检查 -app：只允许标准库、项目自身 appinterface/** 以及 api 库
 // 的 contracts/** 与 client/**；框架、adapter 与 docgen 不得进入业务契约层，
@@ -41,11 +40,24 @@ import (
 
 const defaultAPIModule = "github.com/bingcool/gofy-interface-api"
 
+// forbiddenFrameworkImports keeps the contract library independent of gofy.
+// A prefix comparison with a trailing slash avoids matching the api library's
+// own module path, which starts with "github.com/bingcool/gofy-interface-api".
+// forbiddenFrameworkImports 保证契约库不依赖 gofy。前缀比较带尾部斜杠，
+// 避免误伤以 github.com/bingcool/gofy-interface-api 开头的本库路径。
+var forbiddenFrameworkImports = []string{
+	"github.com/bingcool/gofy",
+	"github.com/gin-gonic/gin",
+}
+
+const adapterModule = "github.com/bingcool/gofy-interface-gofy"
+
 type rule struct {
 	name      string
 	dirs      []string
 	skipDirs  []string
 	allow     []string
+	deny      []string
 	allowAll  bool
 	checkInit bool
 	testAllow []string
@@ -91,25 +103,14 @@ func main() {
 
 func libraryRules(root, api string) []rule {
 	join := func(p string) string { return filepath.Join(root, p) }
-	nacos := join("client/nacos")
 	rs := []rule{
 		{
 			name: "contracts", dirs: []string{join("contracts")},
 			allow: []string{api + "/contracts"}, checkInit: true,
 		},
 		{
-			name: "client", dirs: []string{join("client")}, skipDirs: []string{nacos},
+			name: "client", dirs: []string{join("client")},
 			allow: []string{api + "/contracts", api + "/client"}, checkInit: true,
-		},
-		{
-			name: "client/nacos", dirs: []string{nacos},
-			allow:     []string{api + "/contracts", api + "/client", "github.com/bingcool/gofy/support/nacos"},
-			checkInit: true,
-		},
-		{
-			name: "adapter/gofy", dirs: []string{join("adapter/gofy")},
-			allow:     []string{api + "/contracts", api + "/docsui", "github.com/bingcool/gofy", "github.com/gin-gonic/gin"},
-			checkInit: true,
 		},
 		{
 			name: "docgen", dirs: []string{join("docgen")},
@@ -130,6 +131,7 @@ func libraryRules(root, api string) []rule {
 	}
 	for i := range rs {
 		rs[i].testAllow = []string{api}
+		rs[i].deny = forbiddenFrameworkImports
 	}
 	return rs
 }
@@ -177,6 +179,10 @@ func checkRule(r rule) ([]string, error) {
 			}
 			for _, spec := range file.Imports {
 				importPath := strings.Trim(spec.Path.Value, `"`)
+				if isDenied(importPath, er.deny) {
+					problems = append(problems, fmt.Sprintf("%s: %s must not import framework %q", path, r.name, importPath))
+					continue
+				}
 				if !allowed(importPath, er) {
 					problems = append(problems, fmt.Sprintf("%s: forbidden import %q in %s", path, importPath, r.name))
 				}
@@ -202,6 +208,15 @@ func isSkipped(path string, skips []string) bool {
 	clean := filepath.Clean(path)
 	for _, s := range skips {
 		if clean == filepath.Clean(s) {
+			return true
+		}
+	}
+	return false
+}
+
+func isDenied(importPath string, deny []string) bool {
+	for _, prefix := range deny {
+		if importPath == prefix || strings.HasPrefix(importPath, prefix+"/") {
 			return true
 		}
 	}

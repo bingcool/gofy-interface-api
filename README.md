@@ -1,16 +1,27 @@
 # gofy-interface-api
 
-gofy 生态的契约基础设施库：`contracts/`（纯契约原语）、`client/`（泛型 HTTP 客户端）、
-`adapter/gofy/`（服务端绑定）、`docgen/`（OpenAPI 生成）、`docsui/`（Swagger UI）与
-`cmd/`（校验、预览、分层引用检查）。
+框架无关的契约基础设施库：`contracts/`（纯契约原语）、`client/`（泛型 HTTP
+客户端）、`docgen/`（OpenAPI 生成）、`docsui/`（Swagger UI）与 `cmd/`（校验、
+预览、分层引用检查）。
 
-业务契约（`appinterface/`）与生成物（`openapi/`）**不属于本库**，由各项目自己的契约
-module 维护；生成入口是项目侧的 `cmd/openapi`，调用 `docgen.Command(routes, defaults)`。
+本库 `go.mod` **不含 gofy，也不含 gin**。把契约绑定到 gofy 框架的
+`adapter/gofy` 与基于 Nacos 的服务发现 `client/nacos` 已迁至独立库
+`gofy-interface-gofy`；业务契约（`appinterface/`）与生成物（`openapi/`）
+由各项目自己的契约 module 维护，生成入口是项目侧 `cmd/openapi`。
+
+## 依赖方向
+
+`gofy` 与本库互不依赖；`gofy-interface-gofy` 单独承担全部框架耦合：
+
+```
+gofy  <--require--  gofy-interface-gofy  --require-->  gofy-interface-api  <--require--  项目契约模块
+```
+
+因此本库可以独立打 tag，也能被非 gofy 框架的项目消费。
 
 ## 本地联调
 
-`go.mod` 中的 `replace github.com/bingcool/gofy => ../gofy` 要求 gofy 仓库与本库并排
-checkout。发布时删除该 replace，并固定一个已发布的 gofy 最低版本。
+本库不依赖任何本地仓库，`go.mod` 没有 `replace`，可直接：
 
 ```bash
 make check     # fmt-check + vet + test-race + refcheck
@@ -18,8 +29,10 @@ make check     # fmt-check + vet + test-race + refcheck
 
 ## 分层约束
 
-`contracts/**` 只依赖标准库；`client/**`（除 `client/nacos`）不依赖 gofy；仅
-`adapter/gofy` 与 `client/nacos` 允许依赖 gofy。规则由 `cmd/refcheck -mode library`
-校验，项目侧用 `-mode contracts` 校验自己的 `appinterface/`。
+- `contracts/**` 只依赖标准库；`client/**` 不依赖任何框架；
+- `docgen/**` 限于 contracts、kin-openapi、yaml；`docsui/**` 限于 swgui；
+- `cmd/**` 可引用库内任意包；
+- **全库禁止 import `gofy` 与 `gin`**，禁止 `func init()`。
 
-本库是 **gofy 生态专用**契约库（`go.mod` require gofy），不是框架无关的通用契约库。
+规则由 `cmd/refcheck -mode library` 强制；项目侧用 `-mode contracts`
+校验自己的 `appinterface/`。

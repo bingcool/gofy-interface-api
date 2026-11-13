@@ -34,17 +34,51 @@ func TestAllowedLibraryRules(t *testing.T) {
 		{"contracts", "github.com/gin-gonic/gin", false},
 		{"client", defaultAPIModule + "/client", true},
 		{"client", "github.com/bingcool/gofy/support/nacos", false},
-		{"client/nacos", "github.com/bingcool/gofy/support/nacos", true},
-		{"adapter/gofy", defaultAPIModule + "/docsui", true},
-		{"adapter/gofy", "github.com/gin-gonic/gin", true},
 		{"docgen", "github.com/getkin/kin-openapi/openapi3", true},
 		{"docgen", defaultAPIModule + "/docsui", false},
 		{"docsui", "github.com/swaggest/swgui/v5emb", true},
+		{"internal", defaultAPIModule + "/contracts/common/endpoint", true},
+		{"internal", "github.com/gin-gonic/gin", false},
 		{"cmd", "anything/at/all", true},
 	}
 	for _, tc := range cases {
 		if got := allowed(tc.imp, byName[tc.ruleName]); got != tc.want {
 			t.Errorf("allowed(%q, %s) = %v, want %v", tc.imp, tc.ruleName, got, tc.want)
+		}
+	}
+	if _, ok := byName["adapter/gofy"]; ok {
+		t.Fatal("the gofy adapter must no longer be a library rule")
+	}
+	if _, ok := byName["client/nacos"]; ok {
+		t.Fatal("the nacos resolver must no longer be a library rule")
+	}
+}
+
+func TestDeniedFrameworkImports(t *testing.T) {
+	cases := []struct {
+		imp  string
+		want bool
+	}{
+		{"github.com/bingcool/gofy", true},
+		{"github.com/bingcool/gofy/support", true},
+		{"github.com/bingcool/gofy/support/nacos", true},
+		{"github.com/gin-gonic/gin", true},
+		{"github.com/bingcool/gofy-interface-api/contracts/common/endpoint", false},
+		{"github.com/bingcool/gofy-interface-api/client", false},
+		{"github.com/bingcool/gofy-interface-gofy/adapter/gofy", false},
+		{"context", false},
+	}
+	for _, tc := range cases {
+		if got := isDenied(tc.imp, forbiddenFrameworkImports); got != tc.want {
+			t.Errorf("isDenied(%q) = %v, want %v", tc.imp, got, tc.want)
+		}
+	}
+}
+
+func TestLibraryRulesApplyFrameworkDenyEverywhere(t *testing.T) {
+	for _, r := range libraryRules(".", defaultAPIModule) {
+		if len(r.deny) == 0 {
+			t.Errorf("%s has no framework deny list", r.name)
 		}
 	}
 }
@@ -59,7 +93,11 @@ func init() {}
 
 var _ = gin.New
 `)
-	r := rule{name: "contracts", dirs: []string{dir}, allow: []string{defaultAPIModule + "/contracts"}, checkInit: true}
+	r := rule{
+		name: "contracts", dirs: []string{dir},
+		allow: []string{defaultAPIModule + "/contracts"},
+		deny:  forbiddenFrameworkImports, checkInit: true,
+	}
 	problems, err := checkRule(r)
 	if err != nil {
 		t.Fatalf("checkRule: %v", err)
@@ -104,7 +142,7 @@ func TestContractsRuleRejectsFrameworkImports(t *testing.T) {
 	write(t, dir, "api.go", `package demoservice
 
 import (
-	"github.com/bingcool/gofy-interface-api/adapter/gofy"
+	"`+adapterModule+`/adapter/gofy"
 	"github.com/bingcool/gofy-interface-api/docgen"
 )
 
