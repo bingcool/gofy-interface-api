@@ -65,7 +65,7 @@ func TestDeniedFrameworkImports(t *testing.T) {
 		{"github.com/gin-gonic/gin", true},
 		{"github.com/bingcool/gofy-interface-api/contracts/common/endpoint", false},
 		{"github.com/bingcool/gofy-interface-api/client", false},
-		{"github.com/bingcool/gofy-interface-gofy/adapter/gofy", false},
+		{"github.com/bingcool/gofy-adapter/adapter/gofy", false},
 		{"context", false},
 	}
 	for _, tc := range cases {

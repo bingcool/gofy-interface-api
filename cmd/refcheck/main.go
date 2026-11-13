@@ -3,7 +3,7 @@
 //
 // In library mode each directory is checked against the rules in §4.3. The
 // library is framework independent: gofy and gin are denied everywhere, because
-// the gofy adapter and the Nacos resolver now live in gofy-interface-gofy.
+// the gofy adapter and the Nacos resolver now live in gofy-adapter.
 // contracts may import only the standard library and contracts/**; client/**
 // additionally allows contracts/** and client/**; docgen is limited to
 // contracts, kin-openapi and yaml; docsui is limited to swgui; cmd may import
@@ -16,7 +16,7 @@
 // 命令 refcheck 校验 gofy-interface-api 与项目契约模块的分层边界。
 //
 // library 模式按 §4.3 逐目录检查。本库与框架无关：gofy 与 gin 在全库范围内
-// 禁止，因为 gofy adapter 与 Nacos resolver 已迁至 gofy-interface-gofy。
+// 禁止，因为 gofy adapter 与 Nacos resolver 已迁至 gofy-adapter。
 // contracts 只允许标准库与 contracts/**；client 增加 contracts/** 与 client/**；
 // docgen 限于 contracts、kin-openapi 与 yaml；docsui 限于 swgui；cmd 可 import
 // 库内任意包。任何文件都不得声明 init()。
@@ -50,7 +50,7 @@ var forbiddenFrameworkImports = []string{
 	"github.com/gin-gonic/gin",
 }
 
-const adapterModule = "github.com/bingcool/gofy-interface-gofy"
+const adapterModule = "github.com/bingcool/gofy-adapter"
 
 type rule struct {
 	name      string

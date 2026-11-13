@@ -6,15 +6,15 @@
 
 本库 `go.mod` **不含 gofy，也不含 gin**。把契约绑定到 gofy 框架的
 `adapter/gofy` 与基于 Nacos 的服务发现 `client/nacos` 已迁至独立库
-`gofy-interface-gofy`；业务契约（`appinterface/`）与生成物（`openapi/`）
+`gofy-adapter`；业务契约（`appinterface/`）与生成物（`openapi/`）
 由各项目自己的契约 module 维护，生成入口是项目侧 `cmd/openapi`。
 
 ## 依赖方向
 
-`gofy` 与本库互不依赖；`gofy-interface-gofy` 单独承担全部框架耦合：
+`gofy` 与本库互不依赖；`gofy-adapter` 单独承担全部框架耦合：
 
 ```
-gofy  <--require--  gofy-interface-gofy  --require-->  gofy-interface-api  <--require--  项目契约模块
+gofy  <--require--  gofy-adapter  --require-->  gofy-interface-api  <--require--  项目契约模块
 ```
 
 因此本库可以独立打 tag，也能被非 gofy 框架的项目消费。
