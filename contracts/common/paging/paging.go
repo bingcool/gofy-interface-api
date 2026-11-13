@@ -6,10 +6,10 @@ package paging
 // page/page_size so services do not invent size/limit/per_page variants.
 // PageRequest 由分页请求嵌入，统一使用 page/page_size 命名，
 // 避免各服务自造 size、limit、per_page 之类的变体。
-// Page 默认 1、PageSize 默认 20 且上限 100，由绑定层依据 struct tag 生效。
+// Page 默认 1、PageSize 默认 20 且上限 10000，由绑定层依据 struct tag 生效。
 type PageRequest struct {
 	Page     int `form:"page" json:"page" default:"1" validate:"min=1" doc:"页码，从 1 开始" example:"1"`
-	PageSize int `form:"page_size" json:"page_size" default:"20" validate:"min=1,max=100" doc:"每页条数，最大 100" example:"20"`
+	PageSize int `form:"page_size" json:"page_size" default:"20" validate:"min=1,max=10000" doc:"每页条数，最大10000" example:"20"`
 }
 
 // Offset returns the zero-based row offset.
