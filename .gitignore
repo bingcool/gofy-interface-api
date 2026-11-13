@@ -1,0 +1,9 @@
+.env
+*.log
+*.pid
+.idea/
+.workbuddy/
+bin/
+dist/
+coverage.out
+.DS_Store
