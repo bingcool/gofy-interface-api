@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/bingcool/gofy-interface-api/contracts/common/endpoint"
@@ -49,8 +50,18 @@ func Call[Req, Res any](
 	return decodeResponse[Res](resp, rt.Spec(), c.maxResponse)
 }
 
+// newCallOptions builds the option set every call starts from. Both the header
+// map and the query values are allocated here: the With* options append to them
+// (http.Header.Set and url.Values.Add both need a live map), so a nil field
+// would turn an ordinary option into a panic on the caller's side.
+// newCallOptions 构造每次调用共享的初始选项。header map 与 query 值都在这里分配：
+// With* 选项会往里面追加（http.Header.Set 与 url.Values.Add 都需要已初始化的 map），
+// 留成 nil 会把一个普通选项变成调用方的 panic。
 func newCallOptions(opts []CallOption) callOptions {
-	options := callOptions{headers: make(http.Header)}
+	options := callOptions{
+		headers: make(http.Header),
+		query:   make(url.Values),
+	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&options)
