@@ -88,6 +88,18 @@ func StreamSSE[Req any](
 			if ctx.Err() != nil {
 				return
 			}
+			// Re-resolve on every reconnect, the same way a normal call resolves
+			// on every retry: with a Resolver the instance that just dropped may
+			// be gone, and staying on its address would loop against a dead
+			// endpoint. A fixed BaseURL simply returns the same address again.
+			// 每次重连都重新解析，与普通调用每次重试都解析一致：用 Resolver 时刚断开的
+			// 实例可能已经不在了，停在它的地址上只会对着一个死端点重试。固定 BaseURL
+			// 只是又返回同一个地址。
+			base, err = c.base(ctx)
+			if err != nil {
+				errs <- err
+				return
+			}
 			resp, err = c.openStream(ctx, base, rt.Spec(), req, options, "text/event-stream", lastID)
 			if err != nil {
 				errs <- err
