@@ -33,6 +33,13 @@ const (
 	defaultUserAgent        = "gofy-interface-api/" + Version
 	defaultRequestIDHeader  = "X-Trace-ID"
 	dialKeepAlive           = 30 * time.Second
+
+	// maxDerivedClients bounds the WithConnectTimeout cache. Each entry holds a
+	// transport of its own, so an unbounded cache would keep connection pools
+	// alive for every distinct duration a caller ever passed.
+	// maxDerivedClients 限制 WithConnectTimeout 缓存条数。每条都持有独立的
+	// transport，不设上限就会为调用方传过的每个 duration 长期保留一个连接池。
+	maxDerivedClients = 32
 )
 
 // Config configures a Client.
@@ -99,12 +106,22 @@ type Client struct {
 	userAgent       string
 	requestIDHeader string
 
-	// callClients caches the clients derived by WithConnectTimeout, keyed by
-	// the dial timeout, so calls with the same setting reuse one connection
-	// pool instead of opening a transport per call.
-	// callClients 缓存 WithConnectTimeout 派生出的 Client，以拨号超时为 key，
-	// 相同配置的调用共用连接池，避免每次调用都新建 transport。
-	callClients sync.Map
+	// ownHTTPClient records whether this Client built the http.Client, which is
+	// what makes Close allowed to release its idle connections. A client passed
+	// in through Config belongs to the caller and is left alone.
+	// ownHTTPClient 记录 http.Client 是否由本 Client 构建，Close 因此可以释放它的
+	// 空闲连接。通过 Config 传入的 client 归调用方所有，不做处理。
+	ownHTTPClient bool
+
+	// callMu guards callClients. A map behind a mutex rather than sync.Map: the
+	// cache is bounded and needs a length check plus a clean drain on Close,
+	// both of which sync.Map makes awkward. Lookups happen once per call, far
+	// from the hot path a sync.Map is meant for.
+	// callMu 保护 callClients。这里用 map + 互斥锁而不是 sync.Map：缓存有上限，需要
+	// 长度检查，Close 时还要整体取出并清空，这两件事 sync.Map 都不好做。查找每次调用
+	// 一次，根本不在 sync.Map 想优化的热点上。
+	callMu      sync.Mutex
+	callClients map[time.Duration]*http.Client
 }
 
 // New validates cfg and builds a Client.
@@ -131,6 +148,7 @@ func New(cfg Config) (*Client, error) {
 		}
 	}
 
+	ownHTTPClient := cfg.HTTPClient == nil
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Transport: defaultTransport()}
 	}
@@ -170,6 +188,8 @@ func New(cfg Config) (*Client, error) {
 		tokenSource:     cfg.TokenSource,
 		userAgent:       cfg.UserAgent,
 		requestIDHeader: cfg.RequestIDHeader,
+		ownHTTPClient:   ownHTTPClient,
+		callClients:     make(map[time.Duration]*http.Client),
 	}, nil
 }
 
@@ -204,8 +224,14 @@ func (c *Client) httpClientFor(opts callOptions) (*http.Client, error) {
 	if opts.connectTimeout < 0 {
 		return nil, errors.New("client: connect timeout must not be negative")
 	}
-	if cached, ok := c.callClients.Load(opts.connectTimeout); ok {
-		return cached.(*http.Client), nil
+	// Fast path: a setting already in use reuses its pool without building a
+	// transport we would immediately throw away.
+	// 快路径：已经在用的配置直接复用连接池，不必先建一个马上就丢的 transport。
+	c.callMu.Lock()
+	cached, ok := c.callClients[opts.connectTimeout]
+	c.callMu.Unlock()
+	if ok {
+		return cached, nil
 	}
 
 	base := c.httpClient.Transport
@@ -223,8 +249,51 @@ func (c *Client) httpClientFor(opts callOptions) (*http.Client, error) {
 	}).DialContext
 	derived := *c.httpClient
 	derived.Transport = clone
-	actual, _ := c.callClients.LoadOrStore(opts.connectTimeout, &derived)
-	return actual.(*http.Client), nil
+
+	c.callMu.Lock()
+	if cached, ok := c.callClients[opts.connectTimeout]; ok {
+		c.callMu.Unlock()
+		// Another goroutine stored the same setting first; keep its client and
+		// release the idle connections this clone opened while being built.
+		// 另一个 goroutine 先存了同样的配置：用它的，并释放本克隆在构建期间打开的
+		// 空闲连接。
+		clone.CloseIdleConnections()
+		return cached, nil
+	}
+	if len(c.callClients) < maxDerivedClients {
+		c.callClients[opts.connectTimeout] = &derived
+		c.callMu.Unlock()
+		return &derived, nil
+	}
+	c.callMu.Unlock()
+
+	// The cache is full. Refusing to store keeps it bounded when a caller feeds
+	// arbitrary durations; the call still works, it just does not get a pool of
+	// its own to keep. Without this the map grows for the life of the process
+	// with no way to shrink it.
+	// 缓存已满。不写入是了在有调用方传入任意 duration 时保持有界；本次调用照常工作，
+	// 只是不保留专属连接池。没有这一层，map 会随进程寿命无界增长且无法收缩。
+	return &derived, nil
+}
+
+// Close releases the idle connections this Client owns. Calling it more than
+// once is safe, and a Client built with Config.HTTPClient leaves that client
+// alone: it belongs to the caller, who may still be using it.
+// Close 释放本 Client 拥有的空闲连接。重复调用安全；用 Config.HTTPClient 构建的
+// Client 不会动那个 client，它归调用方所有，调用方可能还在用。
+func (c *Client) Close() error {
+	c.callMu.Lock()
+	clients := c.callClients
+	c.callClients = make(map[time.Duration]*http.Client)
+	c.callMu.Unlock()
+
+	for _, hc := range clients {
+		hc.CloseIdleConnections()
+	}
+	if c.ownHTTPClient {
+		c.httpClient.CloseIdleConnections()
+	}
+	return nil
 }
 
 // base returns the base URL for one call. A fixed BaseURL is returned as-is;
