@@ -271,6 +271,14 @@ type Spec struct {
 	// 否则绑定启动期报错。路径可以是相对分组的 "/orders/{id}"，也可以携带完整
 	// 部署前缀 "/api/v1/order/orders/{id}"，完整路由由分组前缀与路径组合得出。
 	Path string
+	// Prefix is the deployment prefix of the group the route belongs to. Group.Add
+	// stamps it from Group.Prefix at declaration time, so contract authors never
+	// set it by hand; clients and docgen read it and build the same full path
+	// through JoinPath. It stays empty for ungrouped routes.
+	// Prefix 是路由所属分组的部署前缀。Group.Add 在声明阶段从 Group.Prefix
+	// 写入，契约作者无需手工设置；客户端与 docgen 读取它，并通过 JoinPath 生成
+	// 同一条完整路径。未分组的路由保持为空。
+	Prefix string
 	// Summary is the short OpenAPI description; when empty docgen uses
 	// "METHOD Path".
 	// Summary 是 OpenAPI 的简短说明；为空时 docgen 使用 "METHOD Path"。
@@ -432,6 +440,11 @@ type Descriptor interface {
 //     the adapter trims the part overlapping the Router group prefix before
 //     binding.
 //
+// Add also stamps Prefix onto every added descriptor (Spec.Prefix), so clients
+// and docgen build the full path from the same declaration instead of a second
+// configured table. A route belongs to one group: adding it to another group
+// overwrites the stamped prefix, which binding detects at startup.
+//
 // The contract layer only declares group information and does not depend on
 // gofy/gin; group and route middleware are registered by name on the server and
 // then applied. Routes keep declaration order, and both binding and document
@@ -443,6 +456,10 @@ type Descriptor interface {
 //     "/orders/{id}"，完整路由 = Prefix + Spec.Path；
 //   - 分组名，如 "/orders"：Spec.Path 写完整路径，adapter 在绑定前会把
 //     与 Router 分组前缀重复的部分裁掉。
+//
+// Add 还会把 Prefix 写入每个加入的路由（Spec.Prefix），客户端与 docgen
+// 因此从同一份声明生成完整路径，不再依赖第二份配置表。一条路由只属于一个
+// 分组：加入另一个分组会覆盖已写入的前缀，绑定阶段会检测出这种不一致。
 //
 // 契约层只声明分组信息，不依赖 gofy/gin；分组中间件和路由中间件都由服务端
 // 按名字注册后应用。Routes 保持声明顺序，绑定和文档生成都按这个顺序进行。
@@ -499,16 +516,42 @@ func (g *Group) Use(names ...string) *Group {
 }
 
 // Add appends routes to the group and returns the group for chained
-// declarations. Append order determines binding order and document order; a nil
-// group returns nil.
+// declarations. Append order determines binding order and document order.
+//
+// Every added route receives the group prefix in Spec.Prefix, so the client and
+// docgen build the full path from the descriptor itself. A nil group returns
+// nil and stamps nothing.
 // Add 把路由加入分组，返回分组本身以便链式声明。加入顺序决定绑定顺序和文档
-// 顺序；nil 分组返回 nil。
+// 顺序。
+//
+// 每条加入的路由都会在 Spec.Prefix 中记录分组前缀，客户端与 docgen 因此可以
+// 直接从描述符生成完整路径。nil 分组返回 nil，不写入任何前缀。
 func (g *Group) Add(routes ...Descriptor) *Group {
 	if g == nil {
 		return nil
 	}
+	prefix := strings.TrimSpace(g.Prefix)
+	for _, route := range routes {
+		if setter, ok := route.(prefixSetter); ok {
+			setter.setPrefix(prefix)
+		}
+	}
 	g.Routes = append(g.Routes, routes...)
 	return g
+}
+
+// prefixSetter lets Group.Add stamp the deployment prefix onto the route value
+// without exporting a mutable accessor. *Route is the only implementation.
+// prefixSetter 让 Group.Add 把部署前缀写进路由值，又不必导出可变访问器。
+// 只有 *Route 实现该接口。
+type prefixSetter interface {
+	setPrefix(prefix string)
+}
+
+func (r *Route[Req, Res]) setPrefix(prefix string) {
+	if r != nil {
+		r.spec.Prefix = prefix
+	}
 }
 
 // AddRoute declares and registers a strongly typed route inside the group and

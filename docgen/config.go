@@ -55,10 +55,19 @@ type Config struct {
 	// several prefixes, declare them as "demoservice" and a more specific
 	// "demoservice.product"; routes carrying the specific tag get that prefix,
 	// and exact tag matches beat the service-level fallback.
+	//
+	// Routes added to an endpoint.Group carry their group prefix in the
+	// descriptor already, and that prefix is the default. An entry here replaces
+	// it while keeping the group-relative remainder, which is how the docgen CLI
+	// -prefix override publishes the same routes under another base.
 	// Prefixes 把服务 key（如 "demoservice"）映射到部署前缀（如 "/api/v1/order"）。
 	// 路由的 tag 等于 key、或等于 key 第一个点之前的部分时使用该前缀。一个服务
 	// 挂多个前缀时，同时声明 "demoservice" 与更具体的 "demoservice.product"：
 	// 带具体 tag 的路由落到具体前缀，精确 tag 命中优先于服务级兜底。
+	//
+	// 加入 endpoint.Group 的路由已在描述符里携带分组前缀，默认以它为准；这里的
+	// 同名条目会替换该前缀并保留分组内剩余路径，docgen CLI 的 -prefix 覆盖据此
+	// 把同一组路由发布到另一个基址。
 	Prefixes map[string]string
 }
 

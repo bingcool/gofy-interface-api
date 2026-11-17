@@ -46,6 +46,12 @@ func (c *Client) buildRequest(ctx context.Context, base string, spec endpoint.Sp
 	if err != nil {
 		return nil, err
 	}
+	// Group.Add stamped the deployment prefix onto the descriptor, so the call
+	// reaches the same path the server binds without the caller repeating it.
+	// WithPathPrefix stays an extra outer prefix (e.g. a gateway mount).
+	// Group.Add 已把部署前缀写入描述符，调用因此直达服务端绑定的同一路径，无需
+	// 调用方重复传入。WithPathPrefix 保留为更外层的额外前缀（例如网关挂载点）。
+	path = endpoint.JoinPath(spec.Prefix, path)
 	path = joinPathPrefix(opts.pathPrefix, path)
 	target := base
 	if path != "" {

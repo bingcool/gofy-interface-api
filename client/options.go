@@ -64,14 +64,14 @@ func WithQuery(key, value string) CallOption {
 	return func(o *callOptions) { o.query.Add(key, value) }
 }
 
-// WithPathPrefix prepends a route-group prefix to the route path for one call.
-// A contract keeps the in-group path in Spec.Path and the deployment prefix on
-// endpoint.Group, so a client calling a grouped route has to supply the group
-// here; without it the request goes to the in-group path only and the server
-// answers 404.
-// WithPathPrefix 为单次调用把路由分组前缀加到路由路径前面。契约把组内路径留在
-// Spec.Path、把部署前缀放在 endpoint.Group 上，因此调用分组路由的客户端必须在这里
-// 给出分组前缀；否则请求只会打到组内路径，服务端回 404。
+// WithPathPrefix prepends an extra prefix in front of the descriptor path for
+// one call, e.g. a gateway mount point or a reverse-proxy sub-path. The group
+// deployment prefix no longer belongs here: Group.Add stamps it onto the
+// descriptor and the client joins it automatically, so repeating it here would
+// duplicate the prefix.
+// WithPathPrefix 为单次调用在描述符路径之前再加一层前缀，例如网关挂载点或反向
+// 代理子路径。分组部署前缀不再需要在这里传入：Group.Add 已把它写入描述符，
+// 客户端会自动拼接，重复传入只会让前缀叠加两遍。
 func WithPathPrefix(prefix string) CallOption {
 	return func(o *callOptions) { o.pathPrefix = strings.TrimSpace(prefix) }
 }

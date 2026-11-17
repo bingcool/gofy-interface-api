@@ -21,30 +21,39 @@ type Spec struct {
 }
 
 // Build generates a document from routes.
-// Build 由路由描述符生成文档：按「前缀 + 路径」与 HTTP 方法稳定排序，并校验
-// operationID 非空且唯一、路径以 / 开头、同一方法加路径不重复。
+// Build 由路由描述符生成文档：按完整部署路径与 HTTP 方法稳定排序，完整路径
+// 优先取 Group.Add 写入描述符的前缀，Config.Prefixes 可把该前缀替换为另一个
+// 部署基址；未分组路由直接以 Config.Prefixes 为前缀。同时校验 operationID
+// 非空且唯一、路径以 / 开头、同一方法加路径不重复。
 func Build(routes []endpoint.Descriptor, cfg Config) (*Spec, error) {
 	cfg = cfg.withDefaults()
 	ctx := newContext(cfg)
 	ctx.components["CommonEnvelope"] = commonEnvelope()
 	ctx.components["CommonErrorEnvelope"] = commonErrorEnvelope()
 
-	ordered := append([]endpoint.Descriptor(nil), routes...)
+	type builtRoute struct {
+		desc endpoint.Descriptor
+		spec endpoint.Spec
+		path string
+	}
+	ordered := make([]builtRoute, 0, len(routes))
+	for _, desc := range routes {
+		spec := desc.Spec()
+		ordered = append(ordered, builtRoute{desc: desc, spec: spec, path: cfg.routePath(spec)})
+	}
 	sort.SliceStable(ordered, func(i, j int) bool {
-		left := cfg.prefixFor(ordered[i].Spec().Tags) + ordered[i].Spec().Path
-		right := cfg.prefixFor(ordered[j].Spec().Tags) + ordered[j].Spec().Path
-		if left != right {
-			return left < right
+		if ordered[i].path != ordered[j].path {
+			return ordered[i].path < ordered[j].path
 		}
-		return ordered[i].Spec().Method < ordered[j].Spec().Method
+		return ordered[i].spec.Method < ordered[j].spec.Method
 	})
 
 	paths := make(map[string]any)
 	seenOperation := make(map[string]bool, len(ordered))
 	seenRoute := make(map[string]bool, len(ordered))
 	needAuth := false
-	for _, desc := range ordered {
-		spec := desc.Spec()
+	for _, entry := range ordered {
+		spec := entry.spec
 		if spec.OperationID == "" {
 			return nil, fmt.Errorf("docgen: %s %s has no operation id", spec.Method, spec.Path)
 		}
@@ -56,8 +65,7 @@ func Build(routes []endpoint.Descriptor, cfg Config) (*Spec, error) {
 			return nil, fmt.Errorf("docgen: %s path %q must start with /", spec.OperationID, spec.Path)
 		}
 		method := strings.ToLower(spec.Method)
-		path := cfg.prefixFor(spec.Tags) + spec.Path
-		key := method + " " + path
+		key := method + " " + entry.path
 		if seenRoute[key] {
 			return nil, fmt.Errorf("docgen: duplicate route %s", key)
 		}
@@ -66,14 +74,14 @@ func Build(routes []endpoint.Descriptor, cfg Config) (*Spec, error) {
 		if spec.Auth == endpoint.AuthRequired || spec.Auth == endpoint.AuthOptional {
 			needAuth = true
 		}
-		op, err := ctx.operation(desc, spec)
+		op, err := ctx.operation(entry.desc, spec)
 		if err != nil {
 			return nil, err
 		}
-		item, _ := paths[path].(map[string]any)
+		item, _ := paths[entry.path].(map[string]any)
 		if item == nil {
 			item = make(map[string]any)
-			paths[path] = item
+			paths[entry.path] = item
 		}
 		item[method] = op
 	}
@@ -253,6 +261,44 @@ func (c Config) prefixFor(tags []string) string {
 		}
 	}
 	return ""
+}
+
+// routePath returns the deployment path of one route. By default the path is
+// the prefix Group.Add stamped onto the descriptor plus the group-relative
+// remainder, i.e. exactly what the client sends. A Config.Prefixes entry that
+// matches the route's tags replaces the stamped prefix but keeps the remainder;
+// this is how the docgen CLI -prefix override publishes the same routes under
+// another base. Ungrouped routes take Config.Prefixes as their prefix.
+// routePath 返回一条路由的部署路径。默认路径是 Group.Add 写入描述符的前缀加
+// 分组内剩余路径，与客户端发出的路径完全一致。Config.Prefixes 命中该路由标签时
+// 替换 stamped 前缀但保留剩余路径，docgen CLI 的 -prefix 覆盖据此把同一组路由
+// 发布到另一个基址；未分组路由直接以 Config.Prefixes 为前缀。
+func (c Config) routePath(spec endpoint.Spec) string {
+	configured := c.prefixFor(spec.Tags)
+	if spec.Prefix == "" {
+		return endpoint.JoinPath(configured, spec.Path)
+	}
+	stamped := normalizePrefix(spec.Prefix)
+	remainder := trimPathPrefix(spec.Path, stamped)
+	if configured == "" {
+		return endpoint.JoinPath(stamped, remainder)
+	}
+	return endpoint.JoinPath(configured, remainder)
+}
+
+// trimPathPrefix removes the stamped prefix from a path that already contains
+// it, so the remainder can be attached to another base. A path that does not
+// start with the prefix at a segment boundary is returned unchanged.
+// trimPathPrefix 从已包含 stamped 前缀的路径里去掉该前缀，便于把剩余路径挂到
+// 另一个基址；不以该前缀开头（按段边界比较）的路径原样返回。
+func trimPathPrefix(path, prefix string) string {
+	if path == prefix {
+		return ""
+	}
+	if strings.HasPrefix(path, prefix+"/") {
+		return strings.TrimPrefix(path, prefix)
+	}
+	return path
 }
 
 func securitySchemes(cfg Config, needAuth bool) map[string]any {

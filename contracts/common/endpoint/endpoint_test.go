@@ -75,3 +75,25 @@ func TestGroupAddAndAddRoute(t *testing.T) {
 		t.Fatalf("middleware = %v, want [audit auth]", group.Middleware)
 	}
 }
+
+func TestGroupAddStampsPrefix(t *testing.T) {
+	route := endpoint.Get[testReq, testRes]("/items/{id}", nil)
+	if got := route.Spec().Prefix; got != "" {
+		t.Fatalf("ungrouped prefix = %q, want empty", got)
+	}
+	group := endpoint.NewRouteGroup("/api/test", func(g *endpoint.Group) {
+		g.Add(route)
+	})
+	if got := route.Spec().Prefix; got != "/api/test" {
+		t.Fatalf("stamped prefix = %q, want /api/test", got)
+	}
+	// A route belongs to one group: re-adding it elsewhere overwrites the
+	// stamped prefix, which BindGroup reports as an inconsistency at startup.
+	// 一条路由只属于一个分组：重新加入其他分组会覆盖 stamped 前缀，
+	// BindGroup 会在启动期报告不一致。
+	other := &endpoint.Group{Prefix: "/api/other"}
+	other.Add(group.Routes...)
+	if got := route.Spec().Prefix; got != "/api/other" {
+		t.Fatalf("re-stamped prefix = %q, want /api/other", got)
+	}
+}

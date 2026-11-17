@@ -198,11 +198,11 @@ func TestCallForwardsPropagatedHeaders(t *testing.T) {
 	}
 }
 
-// A grouped contract keeps the deployment prefix on the group, not in
-// Spec.Path, so the caller supplies it per call. The prefix has to compose with
-// path parameters and tolerate a missing leading slash or a trailing one.
-// 分组契约把部署前缀放在分组上而不是 Spec.Path 里，因此调用方按次给出。前缀必须与
-// 路径参数组合，并容忍缺少前导斜杠或多余尾斜杠。
+// WithPathPrefix adds an outer mount prefix on top of the descriptor path that
+// Group.Add already stamped. The option has to compose with path parameters and
+// tolerate a missing leading slash or a trailing one.
+// WithPathPrefix 在 Group.Add 已写入描述符的路径外再叠加一层挂载前缀。该选项必须
+// 与路径参数组合，并容忍缺少前导斜杠或多余尾斜杠。
 func TestWithPathPrefixComposesWithPathParameters(t *testing.T) {
 	cases := []struct {
 		name   string
