@@ -29,11 +29,16 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	interfaceapi "github.com/bingcool/gofy-interface-api"
 )
 
-// Version is the client version reported in User-Agent.
-// Version 是写入 User-Agent 的客户端版本号。
-const Version = "0.1.0"
+// Version is the client version reported in User-Agent. It is the library
+// version: the client ships as part of the module, so a separate number would
+// only create a second thing to bump.
+// Version 是写入 User-Agent 的客户端版本。它就是库版本：客户端随模块一起发布，单独
+// 一个版本号只会多出第二个需要维护的数字。
+const Version = interfaceapi.Version
 
 const (
 	defaultTimeout          = 30 * time.Second

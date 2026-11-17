@@ -5,7 +5,8 @@
 // library is framework independent: gofy and gin are denied everywhere, because
 // the gofy adapter and the Nacos resolver now live in gofy-adapter.
 // contracts may import only the standard library and contracts/**; client/**
-// additionally allows contracts/** and client/**; docgen is limited to
+// additionally allows contracts/**, client/** and the module root package (it
+// reads Version for the User-Agent); docgen is limited to
 // contracts, kin-openapi and yaml; docsui is limited to swgui; cmd may import
 // anything inside the library. No Go file may declare init().
 //
@@ -53,12 +54,18 @@ var forbiddenFrameworkImports = []string{
 const adapterModule = "github.com/bingcool/gofy-adapter"
 
 type rule struct {
-	name      string
-	dirs      []string
-	skipDirs  []string
-	allow     []string
-	deny      []string
-	allowAll  bool
+	name     string
+	dirs     []string
+	skipDirs []string
+	allow    []string
+	deny     []string
+	allowAll bool
+	// allowRoot admits the module's root package exactly. A prefix entry
+	// cannot express it: "example.com/mod" as a prefix also matches every
+	// subpackage, because their paths start with "example.com/mod/".
+	// allowRoot 精确放行模块根包。前缀条目表达不了这件事：以 "example.com/mod" 为前缀
+	// 会连所有子包一起放行，因为它们的路径都以 "example.com/mod/" 开头。
+	allowRoot string
 	checkInit bool
 	testAllow []string
 }
@@ -109,8 +116,15 @@ func libraryRules(root, api string) []rule {
 			allow: []string{api + "/contracts"}, checkInit: true,
 		},
 		{
+			// The client reads the module's root package for the version it
+			// puts in User-Agent, so the two cannot drift apart. That is the
+			// only reason client/** may reach outside contracts/** and
+			// client/**.
+			// client 读取模块根包，取它写进 User-Agent 的版本，两者因此不会各自漂移。
+			// 这是 client/** 能接触到 contracts/** 与 client/** 之外唯一的原因。
 			name: "client", dirs: []string{join("client")},
-			allow: []string{api + "/contracts", api + "/client"}, checkInit: true,
+			allow:     []string{api + "/contracts", api + "/client"},
+			allowRoot: api, checkInit: true,
 		},
 		{
 			name: "docgen", dirs: []string{join("docgen")},
@@ -225,6 +239,9 @@ func isDenied(importPath string, deny []string) bool {
 
 func allowed(importPath string, r rule) bool {
 	if r.allowAll {
+		return true
+	}
+	if r.allowRoot != "" && importPath == r.allowRoot {
 		return true
 	}
 	for _, prefix := range r.allow {

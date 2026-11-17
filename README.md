@@ -1,5 +1,7 @@
 # gofy-interface-api
 
+当前版本：`1.0.0`（`interfaceapi.Version`；`client.Version` 与 User-Agent 用的是同一个值）。
+
 框架无关的契约基础设施库：`contracts/`（纯契约原语）、`client/`（泛型 HTTP
 客户端）、`docgen/`（OpenAPI 生成）、`docsui/`（Swagger UI）与 `cmd/`（校验、
 预览、分层引用检查）。
