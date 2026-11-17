@@ -46,6 +46,7 @@ func (c *Client) buildRequest(ctx context.Context, base string, spec endpoint.Sp
 	if err != nil {
 		return nil, err
 	}
+	path = joinPathPrefix(opts.pathPrefix, path)
 	target := base
 	if path != "" {
 		if !strings.HasPrefix(path, "/") {
@@ -138,6 +139,27 @@ func (c *Client) buildRequest(ctx context.Context, base string, spec endpoint.Sp
 		httpReq.Header.Set(c.requestIDHeader, requestID)
 	}
 	return httpReq, nil
+}
+
+// joinPathPrefix joins a caller-supplied group prefix and the route path. An
+// empty prefix returns the path untouched, so ungrouped contracts pay nothing.
+// joinPathPrefix 拼接调用方给出的分组前缀与路由路径；前缀为空时原样返回，未分组
+// 的契约因此没有任何额外处理。
+func joinPathPrefix(prefix, path string) string {
+	if prefix == "" {
+		return path
+	}
+	if !strings.HasPrefix(prefix, "/") {
+		prefix = "/" + prefix
+	}
+	prefix = strings.TrimRight(prefix, "/")
+	if path == "" {
+		return prefix
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return prefix + path
 }
 
 func wantsQuery(method string) bool {

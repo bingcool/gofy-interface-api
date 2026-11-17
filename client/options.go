@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -16,6 +17,7 @@ type callOptions struct {
 	timeout        time.Duration
 	connectTimeout time.Duration
 	httpClient     *http.Client
+	pathPrefix     string
 }
 
 // CallOption customizes a single call. Options apply to Call and to the
@@ -60,6 +62,18 @@ func WithRequestID(id string) CallOption {
 // WithQuery 追加一个查询参数（同名参数会累加，而不是覆盖）。
 func WithQuery(key, value string) CallOption {
 	return func(o *callOptions) { o.query.Add(key, value) }
+}
+
+// WithPathPrefix prepends a route-group prefix to the route path for one call.
+// A contract keeps the in-group path in Spec.Path and the deployment prefix on
+// endpoint.Group, so a client calling a grouped route has to supply the group
+// here; without it the request goes to the in-group path only and the server
+// answers 404.
+// WithPathPrefix 为单次调用把路由分组前缀加到路由路径前面。契约把组内路径留在
+// Spec.Path、把部署前缀放在 endpoint.Group 上，因此调用分组路由的客户端必须在这里
+// 给出分组前缀；否则请求只会打到组内路径，服务端回 404。
+func WithPathPrefix(prefix string) CallOption {
+	return func(o *callOptions) { o.pathPrefix = strings.TrimSpace(prefix) }
 }
 
 // WithTimeout bounds one ordinary call, including retries and the response

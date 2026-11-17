@@ -195,7 +195,15 @@ func New(cfg Config) (*Client, error) {
 
 func defaultTransport() *http.Transport {
 	return &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
+		// No environment proxy: these clients call service addresses resolved
+		// from Nacos (a pod IP, a LAN host), and routing them through
+		// HTTP_PROXY turns a dead target into the proxy's 502 instead of a
+		// connection error. A caller that really needs a proxy injects its own
+		// *http.Client through Config.HTTPClient.
+		// 不走环境代理：这些客户端调用的是从 Nacos 解析出来的服务地址（Pod IP、内网
+		// 主机），经 HTTP_PROXY 转发会把"目标已死"变成代理返回的 502，而不是连接错误。
+		// 确实需要代理的调用方通过 Config.HTTPClient 注入自己的 *http.Client。
+		Proxy: nil,
 		DialContext: (&net.Dialer{
 			Timeout:   10 * time.Second,
 			KeepAlive: dialKeepAlive,

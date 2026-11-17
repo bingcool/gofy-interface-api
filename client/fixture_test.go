@@ -197,3 +197,41 @@ func TestCallForwardsPropagatedHeaders(t *testing.T) {
 		t.Fatalf("X-Tenant-Id = %q", tenant)
 	}
 }
+
+// A grouped contract keeps the deployment prefix on the group, not in
+// Spec.Path, so the caller supplies it per call. The prefix has to compose with
+// path parameters and tolerate a missing leading slash or a trailing one.
+// 分组契约把部署前缀放在分组上而不是 Spec.Path 里，因此调用方按次给出。前缀必须与
+// 路径参数组合，并容忍缺少前导斜杠或多余尾斜杠。
+func TestWithPathPrefixComposesWithPathParameters(t *testing.T) {
+	cases := []struct {
+		name   string
+		prefix string
+		want   string
+	}{
+		{name: "absolute", prefix: "/api/v1/order", want: "/api/v1/order/api/test/items/7"},
+		{name: "no leading slash", prefix: "api/v1/order", want: "/api/v1/order/api/test/items/7"},
+		{name: "trailing slash", prefix: "/api/v1/order/", want: "/api/v1/order/api/test/items/7"},
+		{name: "empty prefix", prefix: "", want: "/api/test/items/7"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotPath string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.Path
+				_, _ = io.WriteString(w, `{"code":0,"msg":"success","data":{"item":{"id":7,"name":"item"}}}`)
+			}))
+			defer server.Close()
+
+			c := newFixtureClient(t, server.URL, client.Config{})
+			_, err := client.Call(context.Background(), c, testcontract.GetItem,
+				&testcontract.ItemRequest{ID: 7}, client.WithPathPrefix(tc.prefix))
+			if err != nil {
+				t.Fatalf("Call: %v", err)
+			}
+			if gotPath != tc.want {
+				t.Fatalf("path = %q, want %q", gotPath, tc.want)
+			}
+		})
+	}
+}
