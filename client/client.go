@@ -4,10 +4,19 @@
 // Callers use Call[Req, Res] with a route descriptor; the client builds the
 // URL, encodes the request, decodes the gofy envelope and maps business codes
 // to *APIError. The package depends only on the standard library and contracts.
+//
+// Multipart requests are buffered in memory before they are sent, so peak
+// memory is roughly body size × concurrent uploads. Config.MaxMultipartBytes
+// caps one body; a larger file belongs outside this client (a signed upload
+// URL), not in a Call.
 // 包 client 是面向 interface-service 契约、与框架无关的 HTTP Client。
 //
 // 调用方配合路由描述符使用 Call[Req, Res]；Client 负责构造 URL、编码请求、
 // 解析 gofy 信封并把业务码映射成 *APIError。本包只依赖标准库与契约包。
+//
+// multipart 请求在发送前整体缓冲在内存中，峰值约为请求体大小 × 并发上传数。
+// Config.MaxMultipartBytes 限制单个请求体；更大的文件应走本客户端之外的通道
+// （例如预签名上传地址），而不是放进一次 Call。
 package client
 
 import (
@@ -29,10 +38,18 @@ const Version = "0.1.0"
 const (
 	defaultTimeout          = 30 * time.Second
 	defaultMaxResponseBytes = 10 << 20
-	defaultRetry            = 1
-	defaultUserAgent        = "gofy-interface-api/" + Version
-	defaultRequestIDHeader  = "X-Trace-ID"
-	dialKeepAlive           = 30 * time.Second
+	// defaultMaxMultipartBytes bounds one multipart body. Multipart is encoded
+	// into memory before it is sent, so without a cap a single upload is limited
+	// only by available RAM; 16 MiB covers the small-file path and fails loudly
+	// above it instead of at the OOM killer.
+	// defaultMaxMultipartBytes 限制单个 multipart 请求体。multipart 在发送前会整体编码
+	// 到内存，不设上限时单次上传只受可用内存限制；16 MiB 覆盖小文件场景，超过时明确报错，
+	// 而不是等 OOM killer。
+	defaultMaxMultipartBytes = 16 << 20
+	defaultRetry             = 1
+	defaultUserAgent         = "gofy-interface-api/" + Version
+	defaultRequestIDHeader   = "X-Trace-ID"
+	dialKeepAlive            = 30 * time.Second
 
 	// maxDerivedClients bounds the WithConnectTimeout cache. Each entry holds a
 	// transport of its own, so an unbounded cache would keep connection pools
@@ -70,6 +87,13 @@ type Config struct {
 	// MaxResponseBytes 限制普通 JSON 响应体大小，默认 10 MiB。
 	MaxResponseBytes int64
 
+	// MaxMultipartBytes limits one encoded multipart body. Default 16 MiB. The
+	// body is buffered in memory, so this is also the per-upload memory ceiling;
+	// the limit is per request, not per client. A negative value is rejected.
+	// MaxMultipartBytes 限制单个编码后的 multipart 请求体，默认 16 MiB。请求体会缓冲在
+	// 内存中，因此它同时是单次上传的内存上限；上限按请求算，不按客户端算。负值会被拒绝。
+	MaxMultipartBytes int64
+
 	// Retry is the maximum number of retries for replayable requests.
 	// Default 1 (two attempts total).
 	// Retry 是可重放请求的最大重试次数，默认 1（共两次尝试）。
@@ -100,6 +124,7 @@ type Client struct {
 	httpClient      *http.Client
 	timeout         time.Duration
 	maxResponse     int64
+	maxMultipart    int64
 	retry           int
 	resolver        Resolver
 	tokenSource     func(ctx context.Context) (string, error)
@@ -164,6 +189,12 @@ func New(cfg Config) (*Client, error) {
 	if cfg.MaxResponseBytes < 0 {
 		return nil, errors.New("client: MaxResponseBytes must not be negative")
 	}
+	if cfg.MaxMultipartBytes == 0 {
+		cfg.MaxMultipartBytes = defaultMaxMultipartBytes
+	}
+	if cfg.MaxMultipartBytes < 0 {
+		return nil, errors.New("client: MaxMultipartBytes must not be negative")
+	}
 	if cfg.Retry < 0 {
 		return nil, errors.New("client: Retry must not be negative")
 	}
@@ -183,6 +214,7 @@ func New(cfg Config) (*Client, error) {
 		httpClient:      cfg.HTTPClient,
 		timeout:         cfg.Timeout,
 		maxResponse:     cfg.MaxResponseBytes,
+		maxMultipart:    cfg.MaxMultipartBytes,
 		retry:           cfg.Retry,
 		resolver:        cfg.Resolver,
 		tokenSource:     cfg.TokenSource,

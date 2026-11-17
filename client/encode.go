@@ -75,7 +75,7 @@ func (c *Client) buildRequest(ctx context.Context, base string, spec endpoint.Sp
 		u.RawQuery = query.Encode()
 	}
 
-	body, contentType, err := encodeBody(spec, req)
+	body, contentType, err := encodeBody(spec, req, c.maxMultipart)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +170,7 @@ func wantsQuery(method string) bool {
 	return false
 }
 
-func encodeBody(spec endpoint.Spec, req any) ([]byte, string, error) {
+func encodeBody(spec endpoint.Spec, req any, maxMultipart int64) ([]byte, string, error) {
 	if req == nil {
 		return nil, "", nil
 	}
@@ -181,7 +181,7 @@ func encodeBody(spec endpoint.Spec, req any) ([]byte, string, error) {
 	}
 	contentType := strings.TrimSpace(spec.RequestContentType)
 	if contentType == contentTypeMultipart {
-		return encodeMultipart(req)
+		return encodeMultipart(req, maxMultipart)
 	}
 	if contentType == "" {
 		contentType = contentTypeJSON
@@ -193,9 +193,19 @@ func encodeBody(spec endpoint.Spec, req any) ([]byte, string, error) {
 	return body, contentType, nil
 }
 
-func encodeMultipart(req any) ([]byte, string, error) {
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
+// encodeMultipart writes the whole body into memory, because http.Request holds
+// a []byte here. The cap therefore has to sit on the writer: the parts are
+// io.Readers of unknown length, so the only universal place to measure the
+// result is as it is produced.
+// encodeMultipart 把整个请求体写进内存，因为这里的 http.Request 持有 []byte。上限因此
+// 必须落在 writer 上：各 part 是长度未知的 io.Reader，唯一能统一测量结果的位置就是写入
+// 过程本身。
+func encodeMultipart(req any, limit int64) ([]byte, string, error) {
+	if limit <= 0 {
+		limit = defaultMaxMultipartBytes
+	}
+	buf := &cappedBuffer{left: limit, limit: limit}
+	writer := multipart.NewWriter(buf)
 	if err := writeMultipart(writer, req); err != nil {
 		_ = writer.Close()
 		return nil, "", err
@@ -205,6 +215,28 @@ func encodeMultipart(req any) ([]byte, string, error) {
 	}
 	return buf.Bytes(), writer.FormDataContentType(), nil
 }
+
+// cappedBuffer is a bytes.Buffer that refuses to grow past limit. It fails
+// before writing the chunk that would cross the line, so the buffer never holds
+// more than limit bytes of body — which is the whole point of the cap.
+// cappedBuffer 是一个拒绝超过 limit 的 bytes.Buffer。它在写入会越界的那一块之前就
+// 报错，因此缓冲区永远不会存下超过 limit 的请求体——这正是上限的意义。
+type cappedBuffer struct {
+	buf   bytes.Buffer
+	left  int64
+	limit int64
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	if int64(len(p)) > b.left {
+		return 0, fmt.Errorf("%w: %d bytes (MaxMultipartBytes)", ErrMultipartTooLarge, b.limit)
+	}
+	n, err := b.buf.Write(p)
+	b.left -= int64(n)
+	return n, err
+}
+
+func (b *cappedBuffer) Bytes() []byte { return b.buf.Bytes() }
 
 func writeMultipart(writer *multipart.Writer, req any) error {
 	value := reflect.ValueOf(req)

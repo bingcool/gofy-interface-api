@@ -5,6 +5,15 @@ import (
 	"fmt"
 )
 
+// ErrMultipartTooLarge is returned instead of building a body larger than
+// Config.MaxMultipartBytes. It fires before any bytes are sent, and the wrapped
+// message carries the limit, so a caller can tell "file too big" apart from a
+// transport failure.
+// ErrMultipartTooLarge 在请求体会超过 Config.MaxMultipartBytes 时返回，替代继续构建
+// 请求体。它在发出任何字节之前触发，包装信息里带着上限，调用方因此能把"文件太大"与
+// 传输失败区分开。
+var ErrMultipartTooLarge = errors.New("client: multipart body exceeds limit")
+
 // APIError is a business error returned by the server envelope.
 // APIError 是服务端信封返回的业务错误。
 type APIError struct {
