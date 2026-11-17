@@ -75,17 +75,22 @@ func TestWithQueryOnStreamingCall(t *testing.T) {
 		received <- r.URL.Query()
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, "event: ping\ndata: {}\n\n")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
 	}))
 	defer server.Close()
 
 	route := endpoint.New[testcontract.ConfigRequest, endpoint.NoBody](endpoint.Spec{
-		OperationID: "StreamConfig",
-		Method:      http.MethodGet,
-		Path:        "/api/test/config/stream",
-		Summary:     "stream config",
+		OperationID:  "StreamConfig",
+		Method:       http.MethodGet,
+		Path:         "/api/test/config/stream",
+		Summary:      "stream config",
+		ResponseKind: endpoint.KindSSE,
 	})
 	c := newFixtureClient(t, server.URL, client.Config{})
-	events, errs, err := client.StreamSSE(context.Background(), c, route, &testcontract.ConfigRequest{},
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events, errs, err := client.StreamSSE(ctx, c, route, &testcontract.ConfigRequest{},
 		client.WithQuery("filter", "paid"),
 	)
 	if err != nil {
@@ -102,6 +107,7 @@ func TestWithQueryOnStreamingCall(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("server never received the streaming request")
 	}
+	cancel()
 	for range events {
 	}
 }

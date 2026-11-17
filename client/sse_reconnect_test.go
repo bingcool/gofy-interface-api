@@ -18,11 +18,12 @@ import (
 // streamRoute 是 StreamSSE 使用的 fixture 路由。流没有响应体类型，因此第二个类型
 // 参数是 endpoint.NoBody。
 var streamRoute = endpoint.New[testcontract.ItemRequest, endpoint.NoBody](endpoint.Spec{
-	OperationID: "StreamItem",
-	Method:      http.MethodGet,
-	Path:        "/api/test/stream/{id}",
-	Summary:     "stream one item",
-	Tags:        []string{testcontract.ServiceName},
+	OperationID:  "StreamItem",
+	Method:       http.MethodGet,
+	Path:         "/api/test/stream/{id}",
+	Summary:      "stream one item",
+	Tags:         []string{testcontract.ServiceName},
+	ResponseKind: endpoint.KindSSE,
 })
 
 // flipResolver returns the first address once, then the second forever after —
@@ -161,14 +162,14 @@ func TestStreamSSEFixedBaseURLReconnectsToIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamSSE: %v", err)
 	}
-	for want := range map[int]string{0: "one", 1: "two"} {
+	for want, data := range []string{"one", "two"} {
 		select {
 		case ev, ok := <-events:
 			if !ok {
 				t.Fatalf("stream closed early; err = %v", <-errs)
 			}
-			if string(ev.Data) != map[int]string{0: "one", 1: "two"}[want] {
-				t.Fatalf("event %d = %q", want, ev.Data)
+			if string(ev.Data) != data {
+				t.Fatalf("event %d = %q, want %q", want, ev.Data, data)
 			}
 		case err := <-errs:
 			t.Fatalf("stream error: %v", err)

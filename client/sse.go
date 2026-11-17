@@ -15,6 +15,16 @@ import (
 	"github.com/bingcool/gofy-interface-api/contracts/common/endpoint"
 )
 
+// ErrStreamEnded reports that the server closed the SSE stream cleanly. A
+// clean EOF is treated like any other disconnect: StreamSSE reconnects with
+// Last-Event-ID until Retry is exhausted, then delivers this error. An
+// intentional stop is context cancellation, which ends the stream without an
+// error.
+// ErrStreamEnded 表示服务端正常关闭了 SSE 流。正常 EOF 与其他断连一样处理：
+// StreamSSE 带 Last-Event-ID 重连，直到 Retry 用尽后投递这个错误。主动停止应取消
+// context，此时流直接结束且不报错。
+var ErrStreamEnded = errors.New("client: event stream ended")
+
 // Event is one server-sent event.
 // Event 是一条 Server-Sent Event。
 type Event struct {
@@ -33,10 +43,14 @@ type Download struct {
 	Size        int64
 }
 
-// StreamSSE starts an SSE request. Events are delivered until the context is
-// cancelled or the stream ends. The error channel receives at most one error.
-// StreamSSE 发起 SSE 请求。事件持续投递，直到 context 取消或流结束；错误
-// channel 最多收到一个错误（成功结束时直接关闭）。
+// StreamSSE starts an SSE request for a route declared as endpoint.KindSSE.
+// Events are delivered until the context is cancelled. A clean EOF counts as a
+// disconnect: the stream reconnects with Last-Event-ID until Retry is
+// exhausted, then ErrStreamEnded is delivered. The error channel receives at
+// most one error.
+// StreamSSE 为声明为 endpoint.KindSSE 的路由发起 SSE 请求。事件持续投递，直到
+// context 取消。正常 EOF 也算断连：流会带 Last-Event-ID 重连，直到 Retry 用尽后
+// 投递 ErrStreamEnded。错误 channel 最多收到一个错误。
 func StreamSSE[Req any](
 	ctx context.Context,
 	c *Client,
@@ -58,7 +72,7 @@ func StreamSSE[Req any](
 	if err != nil {
 		return nil, nil, err
 	}
-	resp, err := c.openStream(ctx, base, rt.Spec(), req, options, "text/event-stream", "")
+	resp, err := c.openStream(ctx, base, rt.Spec(), req, options, endpoint.KindSSE, "text/event-stream", "")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -73,10 +87,10 @@ func StreamSSE[Req any](
 		lastID := ""
 		for attempt := 0; ; attempt++ {
 			lastID, err = readEvents(ctx, resp.Body, events, lastID)
-			if err == nil || ctx.Err() != nil {
-				if err != nil && !errors.Is(err, context.Canceled) {
-					errs <- err
-				}
+			if ctx.Err() != nil {
+				return
+			}
+			if err == nil {
 				return
 			}
 			if attempt >= c.retry {
@@ -97,12 +111,16 @@ func StreamSSE[Req any](
 			// 只是又返回同一个地址。
 			base, err = c.base(ctx)
 			if err != nil {
-				errs <- err
+				if ctx.Err() == nil {
+					errs <- err
+				}
 				return
 			}
-			resp, err = c.openStream(ctx, base, rt.Spec(), req, options, "text/event-stream", lastID)
+			resp, err = c.openStream(ctx, base, rt.Spec(), req, options, endpoint.KindSSE, "text/event-stream", lastID)
 			if err != nil {
-				errs <- err
+				if ctx.Err() == nil {
+					errs <- err
+				}
 				return
 			}
 		}
@@ -116,9 +134,13 @@ func (c *Client) openStream(
 	spec endpoint.Spec,
 	req any,
 	opts callOptions,
+	kind endpoint.ResponseKind,
 	accept string,
 	lastEventID string,
 ) (*http.Response, error) {
+	if err := requireResponseKind(spec, kind); err != nil {
+		return nil, err
+	}
 	if lastEventID != "" {
 		opts.headers = opts.headers.Clone()
 		opts.headers.Set("Last-Event-ID", lastEventID)
@@ -143,7 +165,83 @@ func (c *Client) openStream(
 		}
 		return nil, responseError(resp, body)
 	}
+	if err := c.validateStreamResponse(resp, spec, kind); err != nil {
+		return nil, err
+	}
 	return resp, nil
+}
+
+func requireResponseKind(spec endpoint.Spec, want endpoint.ResponseKind) error {
+	if spec.ResponseKind == want {
+		return nil
+	}
+	return fmt.Errorf("%w: route %s declares %q, helper requires %q",
+		ErrResponseKindMismatch, spec.OperationID, spec.ResponseKind, want)
+}
+
+// validateStreamResponse rejects a 2xx answer whose Content-Type belongs to a
+// different shape. Without it a gofy error envelope arrives as file bytes on a
+// download or chunked stream, and an SSE client sees a silent zero-event end.
+// A declared ResponseContentType must match exactly (a trailing "/*" wildcard
+// is honored); when the contract declares none, any non-JSON type is accepted
+// so one download route can serve several file formats.
+// validateStreamResponse 拒绝 Content-Type 与形态不符的 2xx 响应。没有这道检查时，
+// gofy 错误信封会在下载/分块流上变成文件字节，SSE 则表现为静默零事件结束。契约声明的
+// ResponseContentType 必须精确匹配（支持尾部 "/*" 通配）；未声明时接受任意非 JSON
+// 类型，让一个下载路由可以返回多种文件格式。
+func (c *Client) validateStreamResponse(resp *http.Response, spec endpoint.Spec, kind endpoint.ResponseKind) error {
+	got := strings.TrimSpace(resp.Header.Get("Content-Type"))
+	expected := streamContentType(spec, kind)
+	if streamContentTypeMatches(got, expected) {
+		return nil
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+	body, err := readLimited(resp.Body, c.maxResponse)
+	if err != nil {
+		return err
+	}
+	var httpErr *HTTPError
+	if err := responseError(resp, body); !errors.As(err, &httpErr) {
+		return err
+	}
+	want := "a non-JSON stream"
+	if expected != "" {
+		want = fmt.Sprintf("%q", expected)
+	}
+	return &ProtocolError{Message: fmt.Sprintf("unexpected Content-Type %q, want %s", got, want)}
+}
+
+func streamContentType(spec endpoint.Spec, kind endpoint.ResponseKind) string {
+	if kind == endpoint.KindSSE {
+		return "text/event-stream"
+	}
+	return strings.TrimSpace(spec.ResponseContentType)
+}
+
+func streamContentTypeMatches(header, expected string) bool {
+	actual, _, err := mime.ParseMediaType(header)
+	if err != nil || actual == "" {
+		return false
+	}
+	if expected == "" {
+		return !isJSONMediaType(actual)
+	}
+	want, _, err := mime.ParseMediaType(expected)
+	if err != nil || want == "" {
+		return false
+	}
+	if want == "*/*" || want == actual {
+		return true
+	}
+	if strings.HasSuffix(want, "/*") {
+		return strings.HasPrefix(actual, strings.TrimSuffix(want, "*"))
+	}
+	return false
+}
+
+func isJSONMediaType(mediaType string) bool {
+	return mediaType == "application/json" || strings.HasSuffix(mediaType, "+json")
 }
 
 func readEvents(ctx context.Context, body io.Reader, out chan<- Event, lastID string) (string, error) {
@@ -207,7 +305,7 @@ func readEvents(ctx context.Context, body io.Reader, out chan<- Event, lastID st
 				if !dispatch() {
 					return lastID, ctx.Err()
 				}
-				return lastID, nil
+				return lastID, ErrStreamEnded
 			}
 			return lastID, fmt.Errorf("client: read event stream: %w", err)
 		}
@@ -219,9 +317,11 @@ func readEvents(ctx context.Context, body io.Reader, out chan<- Event, lastID st
 	}
 }
 
-// DownloadFile starts a download and returns the open body. The caller closes
+// DownloadFile starts a download for a route declared as
+// endpoint.KindDownload and returns the open body. The caller closes
 // Download.Body.
-// DownloadFile 发起下载并返回已打开的响应体，调用方负责关闭 Download.Body。
+// DownloadFile 为声明为 endpoint.KindDownload 的路由发起下载并返回已打开的响应体，
+// 调用方负责关闭 Download.Body。
 func DownloadFile[Req any](
 	ctx context.Context,
 	c *Client,
@@ -247,7 +347,7 @@ func DownloadFile[Req any](
 	if accept == "" {
 		accept = "*/*"
 	}
-	resp, err := c.openStream(ctx, base, rt.Spec(), req, options, accept, "")
+	resp, err := c.openStream(ctx, base, rt.Spec(), req, options, endpoint.KindDownload, accept, "")
 	if err != nil {
 		return nil, err
 	}
@@ -259,8 +359,10 @@ func DownloadFile[Req any](
 	}, nil
 }
 
-// StreamChunked starts a chunked response and returns its body.
-// StreamChunked 发起分块响应并返回其响应体，调用方负责关闭。
+// StreamChunked starts a chunked response for a route declared as
+// endpoint.KindChunked and returns its body.
+// StreamChunked 为声明为 endpoint.KindChunked 的路由发起分块响应并返回其响应体，
+// 调用方负责关闭。
 func StreamChunked[Req any](
 	ctx context.Context,
 	c *Client,
@@ -286,7 +388,7 @@ func StreamChunked[Req any](
 	if accept == "" {
 		accept = "application/octet-stream"
 	}
-	resp, err := c.openStream(ctx, base, rt.Spec(), req, options, accept, "")
+	resp, err := c.openStream(ctx, base, rt.Spec(), req, options, endpoint.KindChunked, accept, "")
 	if err != nil {
 		return nil, err
 	}

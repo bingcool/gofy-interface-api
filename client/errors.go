@@ -14,6 +14,14 @@ import (
 // 传输失败区分开。
 var ErrMultipartTooLarge = errors.New("client: multipart body exceeds limit")
 
+// ErrResponseKindMismatch is returned when a streaming helper is used with a
+// route whose Spec.ResponseKind names a different shape. The check runs before
+// the request is sent, so a miswired route cannot consume a stream as a file
+// or vice versa.
+// ErrResponseKindMismatch 在流式 helper 与 Spec.ResponseKind 声明的形态不一致时
+// 返回。检查在发送请求之前执行，接错 helper 的路由不会把流当成文件消费，反之亦然。
+var ErrResponseKindMismatch = errors.New("client: route response kind does not match the helper")
+
 // APIError is a business error returned by the server envelope.
 // APIError 是服务端信封返回的业务错误。
 type APIError struct {
