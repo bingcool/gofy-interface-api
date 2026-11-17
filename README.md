@@ -21,6 +21,23 @@ gofy  <--require--  gofy-adapter  --require-->  gofy-interface-api  <--require--
 
 因此本库可以独立打 tag，也能被非 gofy 框架的项目消费。
 
+## 分组前缀
+
+`endpoint.NewRouteGroup` / `Group.Add` 在声明阶段把分组 `Prefix` 写入每条
+描述符的 `Spec.Prefix`；`client.Call`（含 `StreamSSE`、`DownloadFile`、
+`StreamChunked`）用 `endpoint.JoinPath` 自动拼接，调用方无需逐次传前缀。
+`WithPathPrefix` 只作为更外层的挂载前缀（例如网关子路径）。
+`docgen.Config.Prefixes` 命中标签时替换 stamped 前缀并保留组内剩余路径，
+CLI `-prefix` 覆盖因此继续可用；`gofy-adapter` 的 `BindGroup` 在启动期断言
+stamped 前缀与分组一致。
+
+## 必填字段
+
+`endpoint.FieldRequired` 是 OpenAPI `required` 与客户端编码器的唯一判定源：
+`omitempty` 标签选项或 `default` tag → 可选；`validate:"required"` → 必填；
+`validate:"omitempty"` → 可选；其余非指针字段默认必填。必填字段的零值也会
+发送（multipart 中缺失的文件除外），`uri` 标签字段不会再重复进 query。
+
 ## 本地联调
 
 本库不依赖任何本地仓库，`go.mod` 没有 `replace`，可直接：
@@ -38,3 +55,20 @@ make check     # fmt-check + vet + test-race + refcheck
 
 规则由 `cmd/refcheck -mode library` 强制；项目侧用 `-mode contracts`
 校验自己的 `appinterface/`。
+
+## 流式调用
+
+`StreamSSE` / `DownloadFile` / `StreamChunked` 只接受对应 `ResponseKind`
+（`sse` / `download` / `chunked`）的路由；接错 helper 在发请求之前返回
+`ErrResponseKindMismatch`。
+
+2xx 响应还要通过 `Content-Type` 检查，避免 gofy 错误信封被当成数据：
+
+- SSE 必须是 `text/event-stream`（允许带 charset 等参数）；
+- 下载/分块在契约声明 `ResponseContentType` 时精确匹配，`*/*` 与
+  `type/*` 通配可用；未声明时接受任意非 JSON 类型，但拒绝
+  `application/json` 与 `+json`。
+
+SSE 的正常 EOF 视为断连：按 `Retry` 重新解析地址，并带 `Last-Event-ID`
+续传；重试预算用尽后向错误 channel 投递 `ErrStreamEnded`。主动停止请取消
+context，此时流直接结束且不报错。

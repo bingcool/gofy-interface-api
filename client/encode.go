@@ -261,7 +261,13 @@ func writeMultipart(writer *multipart.Writer, req any) error {
 			return nil
 		}
 		if isZero(fieldValue) {
-			return nil
+			// A required scalar is written even when zero so the server sees the
+			// field; an absent file has no text form and keeps being skipped.
+			// 必填标量即使为零值也写入，服务端因此能看到该字段；缺失的文件
+			// 没有文本形态，仍然跳过。
+			if isFileField(fieldValue.Type()) || !endpoint.FieldRequired(field, "form") {
+				return nil
+			}
 		}
 		if file, ok := asFileHeader(fieldValue); ok {
 			return writeFilePart(writer, name, file)
@@ -275,6 +281,18 @@ func writeMultipart(writer *multipart.Writer, req any) error {
 		}
 		return writer.WriteField(name, text)
 	})
+}
+
+// isFileField reports whether the field carries a multipart file instead of a
+// scalar part, looking through pointers to the element type.
+// isFileField 判断字段是 multipart 文件而非标量 part，判断前会剥掉指针层。
+func isFileField(t reflect.Type) bool {
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	return t == fileHeaderType.Elem() ||
+		t.Implements(uploadFileType) ||
+		reflect.PointerTo(t).Implements(uploadFileType)
 }
 
 func asFileHeader(v reflect.Value) (*multipart.FileHeader, bool) {
@@ -398,7 +416,13 @@ func substitutePath(path string, req any) (string, error) {
 func collectForm(req any, values url.Values) error {
 	return walkStruct(reflect.ValueOf(req), func(field reflect.StructField, value reflect.Value) error {
 		name, _ := parseTag(field.Tag.Get("form"))
-		if name == "" || name == "-" || isZero(value) {
+		if name == "" || name == "-" {
+			return nil
+		}
+		if endpoint.PathParamName(field) != "" {
+			return nil
+		}
+		if isZero(value) && !endpoint.FieldRequired(field, "form") {
 			return nil
 		}
 		if value.Kind() == reflect.Slice || value.Kind() == reflect.Array {
@@ -427,7 +451,10 @@ func collectForm(req any, values url.Values) error {
 func collectHeaders(req any, header http.Header) error {
 	return walkStruct(reflect.ValueOf(req), func(field reflect.StructField, value reflect.Value) error {
 		name, _ := parseTag(field.Tag.Get("header"))
-		if name == "" || name == "-" || isZero(value) {
+		if name == "" || name == "-" {
+			return nil
+		}
+		if isZero(value) && !endpoint.FieldRequired(field, "header") {
 			return nil
 		}
 		if value.Kind() == reflect.Slice || value.Kind() == reflect.Array {
@@ -453,7 +480,10 @@ func collectCookies(req any, header http.Header) error {
 	var pairs []string
 	err := walkStruct(reflect.ValueOf(req), func(field reflect.StructField, value reflect.Value) error {
 		name, _ := parseTag(field.Tag.Get("cookie"))
-		if name == "" || name == "-" || isZero(value) {
+		if name == "" || name == "-" {
+			return nil
+		}
+		if isZero(value) && !endpoint.FieldRequired(field, "cookie") {
 			return nil
 		}
 		text, err := stringify(value)

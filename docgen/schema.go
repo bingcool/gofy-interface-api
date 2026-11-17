@@ -181,7 +181,7 @@ func (c *buildContext) appendFields(t reflect.Type, properties map[string]any, r
 		if field.PkgPath != "" && !field.Anonymous {
 			continue
 		}
-		name, options := parseTag(field.Tag.Get("json"))
+		name, _ := parseTag(field.Tag.Get("json"))
 		if name == "-" {
 			continue
 		}
@@ -209,7 +209,7 @@ func (c *buildContext) appendFields(t reflect.Type, properties map[string]any, r
 		}
 		applyFieldTags(fieldSchema, field)
 		properties[name] = fieldSchema
-		if fieldRequired(field, options) {
+		if endpoint.FieldRequired(field, "json") {
 			*required = append(*required, name)
 		}
 	}
@@ -238,25 +238,6 @@ func applyFieldTags(schema map[string]any, field reflect.StructField) {
 		schema["enum"] = values
 	}
 	applyConstraints(schema, field.Type, validate)
-}
-
-func fieldRequired(field reflect.StructField, options map[string]bool) bool {
-	if options["omitempty"] {
-		return false
-	}
-	if strings.TrimSpace(field.Tag.Get("default")) != "" {
-		return false
-	}
-	rules := strings.Split(field.Tag.Get("validate"), ",")
-	for _, rule := range rules {
-		switch rule {
-		case "required":
-			return true
-		case "omitempty":
-			return false
-		}
-	}
-	return field.Type.Kind() != reflect.Ptr
 }
 
 func enumFor(field reflect.StructField, validate string) ([]any, bool) {

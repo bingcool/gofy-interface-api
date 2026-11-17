@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"errors"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"strings"
@@ -20,8 +21,49 @@ type uploadRequest struct {
 	File *multipart.FileHeader `form:"file"`
 }
 
+// multipartFields mixes required, optional and file parts.
+// multipartFields 同时包含必填、可选与文件 part。
+type multipartFields struct {
+	Required string                `form:"required"`
+	Optional string                `form:"optional,omitempty"`
+	File     *multipart.FileHeader `form:"file"`
+}
+
 func multipartSpec() endpoint.Spec {
 	return endpoint.Spec{Method: http.MethodPost, RequestContentType: "multipart/form-data"}
+}
+
+// TestMultipartKeepsRequiredZeroAndSkipsAbsentFile applies the shared
+// required-field rule to multipart bodies: a required scalar is written even
+// when zero, an optional zero is skipped, and an absent file stays absent
+// because it has no text form.
+// TestMultipartKeepsRequiredZeroAndSkipsAbsentFile 把共享的必填判定用到 multipart
+// 请求体：必填标量即使为零值也写入，可选零值跳过，缺失的文件因为没有文本形态
+// 而保持缺失。
+func TestMultipartKeepsRequiredZeroAndSkipsAbsentFile(t *testing.T) {
+	body, contentType, err := encodeBody(multipartSpec(), &multipartFields{}, 1<<20)
+	if err != nil {
+		t.Fatalf("encodeBody: %v", err)
+	}
+	_, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		t.Fatalf("parse content type: %v", err)
+	}
+	form, err := multipart.NewReader(bytes.NewReader(body), params["boundary"]).ReadForm(1 << 20)
+	if err != nil {
+		t.Fatalf("read form: %v", err)
+	}
+	defer func() { _ = form.RemoveAll() }()
+
+	if values := form.Value["required"]; len(values) != 1 || values[0] != "" {
+		t.Fatalf("required = %v, want one empty value", values)
+	}
+	if values, ok := form.Value["optional"]; ok {
+		t.Fatalf("optional = %v, want omitted", values)
+	}
+	if len(form.File) != 0 {
+		t.Fatalf("file parts = %d, want 0", len(form.File))
+	}
 }
 
 // fileHeader builds a real *multipart.FileHeader, because its Open method reads

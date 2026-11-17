@@ -102,7 +102,7 @@ func (c *buildContext) parameters(reqType reflect.Type, method string) ([]parame
 			if name == "" || name == "-" {
 				continue
 			}
-			if tag == "form" && parseTagName(field.Tag.Get("uri")) != "" {
+			if tag == "form" && endpoint.PathParamName(field) != "" {
 				continue
 			}
 			groups[tag] = append(groups[tag], tagged{field: field, value: value})
@@ -137,7 +137,7 @@ func (c *buildContext) parameters(reqType reflect.Type, method string) ([]parame
 			out = append(out, parameter{
 				name:     parseTagName(item.field.Tag.Get("form")),
 				in:       "query",
-				required: fieldRequired(item.field, parseTagOptions(item.field.Tag.Get("form"))),
+				required: endpoint.FieldRequired(item.field, "form"),
 				schema:   schema,
 				doc:      docOf(item.field),
 				example:  exampleOf(item.field, schema),
@@ -152,7 +152,7 @@ func (c *buildContext) parameters(reqType reflect.Type, method string) ([]parame
 		out = append(out, parameter{
 			name:     parseTagName(item.field.Tag.Get("header")),
 			in:       "header",
-			required: fieldRequired(item.field, parseTagOptions(item.field.Tag.Get("header"))),
+			required: endpoint.FieldRequired(item.field, "header"),
 			schema:   schema,
 			doc:      docOf(item.field),
 			example:  exampleOf(item.field, schema),
@@ -166,7 +166,7 @@ func (c *buildContext) parameters(reqType reflect.Type, method string) ([]parame
 		out = append(out, parameter{
 			name:     parseTagName(item.field.Tag.Get("cookie")),
 			in:       "cookie",
-			required: fieldRequired(item.field, parseTagOptions(item.field.Tag.Get("cookie"))),
+			required: endpoint.FieldRequired(item.field, "cookie"),
 			schema:   schema,
 			doc:      docOf(item.field),
 			example:  exampleOf(item.field, schema),
@@ -451,17 +451,6 @@ func parseTagName(tag string) string {
 		return ""
 	}
 	return strings.Split(tag, ",")[0]
-}
-
-func parseTagOptions(tag string) map[string]bool {
-	options := make(map[string]bool)
-	parts := strings.Split(tag, ",")
-	for _, option := range parts[1:] {
-		if option != "" {
-			options[option] = true
-		}
-	}
-	return options
 }
 
 func docOf(field reflect.StructField) string {
