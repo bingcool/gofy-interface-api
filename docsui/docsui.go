@@ -43,10 +43,10 @@ type Config struct {
 	// DocsPath 是 Swagger UI 的挂载路径，默认为 /docs。
 	DocsPath string
 
-	// Enabled must be true for Handler to serve anything. DocsModule sets it
-	// for you, because mounting the module is already an explicit opt-in.
-	// Enabled 必须为 true，Handler 才会提供任何内容；DocsModule 会自动置位，
-	// 因为挂载该模块本身已经是显式启用。
+	// Enabled must be true for Handler to serve anything. Nothing in this
+	// package defaults it on; the caller turns docs on explicitly.
+	// Enabled 必须为 true，Handler 才会提供任何内容。本包不会自动开启它，必须由
+	// 调用方显式启用。
 	Enabled bool
 
 	// BasicAuth is optional.
