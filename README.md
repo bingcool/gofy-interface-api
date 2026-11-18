@@ -69,6 +69,12 @@ make check     # fmt-check + vet + test-race + refcheck
 被拒绝。`WithTimeout(0)` 与 `NoTimeout` 等效：本次调用只受调用方 context
 限制。
 
+重试预算只对可重放的请求生效：`GET` / `HEAD` / `OPTIONS` / `DELETE` 直接重试，
+`POST` / `PUT` / `PATCH` 必须带幂等键。判定会看三个来源——`WithHeader` 等
+CallOptions、请求结构体的 `header:"Idempotency-Key"` 标签、ctx 里的透传 Header
+（白名单当前不含该键，因此实际生效的是前两个）；三者任一给出非空键即可重试，
+都没有就一次也不重试，因为重复的写无法撤销。键名比较不区分大小写，空值不算键。
+
 成功信封没有 `data`（缺失或为 `null`）时，只有 `NoContent` 路由、
 `endpoint.NoBody` 占位响应与指针响应类型返回 `(nil, nil)`；值类型响应得到
 `*ProtocolError`，不再把调用方即将解引用的空指针交出去。

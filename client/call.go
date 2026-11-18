@@ -91,7 +91,7 @@ func (c *Client) send(ctx context.Context, spec endpoint.Spec, req any, opts cal
 	if err != nil {
 		return nil, err
 	}
-	attempts := 1 + c.retryFor(spec.Method, opts.headers)
+	attempts := 1 + c.retryFor(ctx, spec.Method, req, opts)
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
 		// Resolve on every attempt: the resolver picks an instance per call, so
@@ -140,18 +140,81 @@ func (c *Client) send(ctx context.Context, spec endpoint.Spec, req any, opts cal
 	return nil, errors.New("client: retry loop exhausted")
 }
 
-func (c *Client) retryFor(method string, headers http.Header) int {
+// retryFor decides how many retries this request may have. A write method is
+// only replayable with an idempotency key, and the key can arrive through any of
+// the places a header comes from: CallOptions, the request struct's header tags,
+// or the propagated headers in ctx. All of them are checked here because this
+// decision is made before buildRequest merges them — looking only at the options
+// silently disabled retries for a contract that declares the key as a field.
+// retryFor 决定这次请求可以重试几次。写方法只有带幂等键才可重放，而幂等键可以来自
+// 三个地方：CallOptions、请求结构体的 header 标签、ctx 中的透传 Header。三者都在
+// 这里检查，因为该判定发生在 buildRequest 合并它们之前——只看选项会让"把幂等键
+// 声明成契约字段"的调用彻底失去重试。
+func (c *Client) retryFor(ctx context.Context, method string, req any, opts callOptions) int {
 	switch strings.ToUpper(method) {
 	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodDelete:
 		return c.retry
 	case http.MethodPost, http.MethodPut, http.MethodPatch:
-		// A caller-provided idempotency key makes the request replayable.
-		// 调用方提供幂等键时，请求可以安全重放。
-		if headers.Get("Idempotency-Key") != "" {
+		if carriesIdempotencyKey(ctx, req, opts.headers) {
 			return c.retry
 		}
 	}
 	return 0
+}
+
+// carriesIdempotencyKey reports whether the outgoing request will carry a
+// non-empty Idempotency-Key. Header names are case-insensitive, so each source is
+// compared that way, and a present-but-empty value is not a key.
+// carriesIdempotencyKey 判断发出去的请求是否会带非空的 Idempotency-Key。Header 名
+// 大小写不敏感，因此每个来源都按同样的规则比较；存在但为空的值不算幂等键。
+func carriesIdempotencyKey(ctx context.Context, req any, headers http.Header) bool {
+	if headerHasValue(headers, IdempotencyKeyHeader) {
+		return true
+	}
+	// Propagated headers go through an allowlist that does not list this key
+	// today. Checking it anyway keeps the decision aligned with where headers can
+	// come from, so adding the key to the allowlist will not silently disable
+	// retries again.
+	// 透传 Header 走白名单，当前白名单没有这个键。这里仍然检查，是为了让判定与
+	// "header 可能来自哪里"保持一致：以后把该键加进白名单时，不会又悄悄丢掉重试。
+	if headerHasValue(HeadersFromContext(ctx), IdempotencyKeyHeader) {
+		return true
+	}
+	found := false
+	// walkStruct has no early exit; a request struct is small and this runs once
+	// per call, not once per attempt.
+	// walkStruct 不支持提前退出；请求结构体很小，而且这里每次调用只跑一次，不是
+	// 每次重试跑一次。
+	_ = walkStruct(reflect.ValueOf(req), func(field reflect.StructField, value reflect.Value) error {
+		name, _ := parseTag(field.Tag.Get("header"))
+		if !strings.EqualFold(strings.TrimSpace(name), IdempotencyKeyHeader) {
+			return nil
+		}
+		if text, err := stringify(value); err == nil && strings.TrimSpace(text) != "" {
+			found = true
+		}
+		return nil
+	})
+	return found
+}
+
+// headerHasValue is Header.Get without the canonical-key assumption: a header map
+// can hold non-canonical keys (they are copied verbatim from context), and a
+// missing canonical key must not hide a real value.
+// headerHasValue 相当于不假设 key 已规范化的 Header.Get：header map 里可能有非规范
+// 化的 key（它们是从 context 原样复制来的），只查规范化 key 会漏掉真实的值。
+func headerHasValue(h http.Header, name string) bool {
+	for key, values := range h {
+		if !strings.EqualFold(key, name) {
+			continue
+		}
+		for _, value := range values {
+			if strings.TrimSpace(value) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func decodeResponse[Res any](resp *http.Response, spec endpoint.Spec, max int64) (*Res, error) {

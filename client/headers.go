@@ -28,6 +28,13 @@ const (
 	// HeaderUserAgent 标记发起请求的 SDK。
 	HeaderUserAgent = "X-User-Agent"
 
+	// IdempotencyKeyHeader marks a write request as replayable. A POST, PUT or
+	// PATCH carrying it is retried like a GET; without it the client refuses to
+	// retry, because a duplicate write cannot be undone.
+	// IdempotencyKeyHeader 标记写请求可重放：带它的 POST/PUT/PATCH 与 GET 一样重试；
+	// 不带则客户端拒绝重试，因为重复的写无法撤销。
+	IdempotencyKeyHeader = "Idempotency-Key"
+
 	// DefaultPropagatedUserAgent is used as the X-User-Agent value when neither
 	// the context nor the caller provides one.
 	// DefaultPropagatedUserAgent 在 context 和调用方都没有提供时，
