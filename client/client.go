@@ -63,10 +63,18 @@ const (
 	// 到内存，不设上限时单次上传只受可用内存限制；16 MiB 覆盖小文件场景，超过时明确报错，
 	// 而不是等 OOM killer。
 	defaultMaxMultipartBytes = 16 << 20
-	defaultRetry             = 1
-	defaultUserAgent         = "gofy-interface-api/" + Version
-	defaultRequestIDHeader   = "X-Trace-ID"
-	dialKeepAlive            = 30 * time.Second
+	// defaultMaxEventBytes bounds one SSE event. It is far below the JSON body
+	// limit because an event is a notification, not a payload: a megabyte covers
+	// generated text, tool arguments and metadata, and a server that needs more
+	// per event is really sending a document.
+	// defaultMaxEventBytes 限制单个 SSE 事件。它远小于 JSON 响应体上限，因为事件是
+	// 通知而不是载荷：1 MiB 足够覆盖生成的文本、工具参数与元数据；需要更大事件的服务端
+	// 本质上是在推一份文档。
+	defaultMaxEventBytes   = 1 << 20
+	defaultRetry           = 1
+	defaultUserAgent       = "gofy-interface-api/" + Version
+	defaultRequestIDHeader = "X-Trace-ID"
+	dialKeepAlive          = 30 * time.Second
 
 	// maxDerivedClients bounds the WithConnectTimeout cache. Each entry holds a
 	// transport of its own, so an unbounded cache would keep connection pools
@@ -106,6 +114,16 @@ type Config struct {
 	// MaxResponseBytes limits ordinary JSON bodies. Default 10 MiB.
 	// MaxResponseBytes 限制普通 JSON 响应体大小，默认 10 MiB。
 	MaxResponseBytes int64
+
+	// MaxEventBytes limits one SSE event: neither a single line nor the lines
+	// accumulated for one event may exceed it. Default 1 MiB. A stream has no
+	// total response size to bound it, so without this a server that keeps
+	// sending bytes without a newline makes the client buffer them until it runs
+	// out of memory. A negative value is rejected.
+	// MaxEventBytes 限制单个 SSE 事件：任何一行、以及一个事件累计的多行都不得超过它。
+	// 默认 1 MiB。流没有响应体总大小可兜底，没有这个上限时，服务端持续发送不含换行的
+	// 内容会让客户端一直缓冲直到耗尽内存。负值会被拒绝。
+	MaxEventBytes int64
 
 	// MaxMultipartBytes limits one encoded multipart body. Default 16 MiB. The
 	// body is buffered in memory, so this is also the per-upload memory ceiling;
@@ -147,6 +165,7 @@ type Client struct {
 	timeout         time.Duration
 	maxResponse     int64
 	maxMultipart    int64
+	maxEvent        int64
 	retry           int
 	resolver        Resolver
 	tokenSource     func(ctx context.Context) (string, error)
@@ -216,6 +235,12 @@ func New(cfg Config) (*Client, error) {
 	if cfg.MaxMultipartBytes < 0 {
 		return nil, errors.New("client: MaxMultipartBytes must not be negative")
 	}
+	if cfg.MaxEventBytes == 0 {
+		cfg.MaxEventBytes = defaultMaxEventBytes
+	}
+	if cfg.MaxEventBytes < 0 {
+		return nil, errors.New("client: MaxEventBytes must not be negative")
+	}
 	switch {
 	case cfg.Retry == NoRetry:
 		cfg.Retry = 0
@@ -238,6 +263,7 @@ func New(cfg Config) (*Client, error) {
 		timeout:         cfg.Timeout,
 		maxResponse:     cfg.MaxResponseBytes,
 		maxMultipart:    cfg.MaxMultipartBytes,
+		maxEvent:        cfg.MaxEventBytes,
 		retry:           cfg.Retry,
 		resolver:        cfg.Resolver,
 		tokenSource:     cfg.TokenSource,

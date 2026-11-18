@@ -22,6 +22,16 @@ var ErrMultipartTooLarge = errors.New("client: multipart body exceeds limit")
 // 返回。检查在发送请求之前执行，接错 helper 的路由不会把流当成文件消费，反之亦然。
 var ErrResponseKindMismatch = errors.New("client: route response kind does not match the helper")
 
+// ErrEventTooLarge is returned when one SSE event exceeds Config.MaxEventBytes:
+// either a single line without a newline, or the lines accumulated for one
+// event. A stream has no total response size to bound it, so this is the only
+// thing standing between a misbehaving server and unbounded client memory. The
+// stream is not retried after this error — the server would do it again.
+// ErrEventTooLarge 在单个 SSE 事件超过 Config.MaxEventBytes 时返回：可能是一行不含
+// 换行的超长内容，也可能是一个事件累计的多行。流没有响应体总大小可以兜底，因此这是
+// 异常服务端与客户端内存之间唯一的约束。这个错误不会触发重连——重连只会重来一次。
+var ErrEventTooLarge = errors.New("client: sse event exceeds limit")
+
 // APIError is a business error returned by the server envelope.
 // APIError 是服务端信封返回的业务错误。
 type APIError struct {

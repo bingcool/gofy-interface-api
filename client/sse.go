@@ -86,11 +86,20 @@ func StreamSSE[Req any](
 
 		lastID := ""
 		for attempt := 0; ; attempt++ {
-			lastID, err = readEvents(ctx, resp.Body, events, lastID)
+			lastID, err = readEvents(ctx, resp.Body, events, lastID, c.maxEvent)
 			if ctx.Err() != nil {
 				return
 			}
 			if err == nil {
+				return
+			}
+			// An oversized event is the server's behaviour, not a dropped
+			// connection: reconnecting would read the same bytes again and grow
+			// the buffer again. Report it and stop.
+			// 超限事件是服务端的行为，不是断连：重连只会再读一遍同样的字节、再涨一次
+			// 缓冲。直接上报并停下。
+			if errors.Is(err, ErrEventTooLarge) {
+				errs <- err
 				return
 			}
 			if attempt >= c.retry {
@@ -244,13 +253,14 @@ func isJSONMediaType(mediaType string) bool {
 	return mediaType == "application/json" || strings.HasSuffix(mediaType, "+json")
 }
 
-func readEvents(ctx context.Context, body io.Reader, out chan<- Event, lastID string) (string, error) {
+func readEvents(ctx context.Context, body io.Reader, out chan<- Event, lastID string, maxEvent int64) (string, error) {
 	reader := bufio.NewReaderSize(body, 64<<10)
 	var (
-		event   string
-		data    []string
-		retry   int
-		hasData bool
+		event      string
+		data       []string
+		retry      int
+		hasData    bool
+		eventBytes int64
 	)
 	dispatch := func() bool {
 		if !hasData && event == "" {
@@ -260,7 +270,7 @@ func readEvents(ctx context.Context, body io.Reader, out chan<- Event, lastID st
 		if len(data) > 0 {
 			ev.Data = []byte(strings.Join(data, "\n"))
 		}
-		event, data, retry, hasData = "", nil, 0, false
+		event, data, retry, hasData, eventBytes = "", nil, 0, false, 0
 		select {
 		case <-ctx.Done():
 			return false
@@ -269,9 +279,20 @@ func readEvents(ctx context.Context, body io.Reader, out chan<- Event, lastID st
 		}
 	}
 	for {
-		line, err := reader.ReadString('\n')
+		line, err := readLine(reader, maxEvent)
 		if len(line) > 0 {
 			line = strings.TrimRight(line, "\r\n")
+			// The cap covers the event as a whole, not just one line: a server can
+			// stay under the per-line limit while piling up thousands of data lines
+			// in a single event that never ends. Only content counts — the blank
+			// line that dispatches the event must not push it over the limit.
+			// 上限针对整个事件而不是单行：服务端可以让每行都合规，却在同一个永不结束的
+			// 事件里堆上成千上万行 data。只统计内容：用于分发事件的那个空行不该把事件
+			// 顶过上限。
+			eventBytes += int64(len(line))
+			if eventBytes > maxEvent {
+				return lastID, fmt.Errorf("%w: event over %d bytes", ErrEventTooLarge, maxEvent)
+			}
 			switch {
 			case line == "":
 				if !dispatch() {
@@ -307,12 +328,51 @@ func readEvents(ctx context.Context, body io.Reader, out chan<- Event, lastID st
 				}
 				return lastID, ErrStreamEnded
 			}
+			// The cap error already names the limit; wrapping it again would only
+			// bury it under "read event stream".
+			// 超限错误本身已经带上了上限，再包一层只会把它埋进"read event stream"。
+			if errors.Is(err, ErrEventTooLarge) {
+				return lastID, err
+			}
 			return lastID, fmt.Errorf("client: read event stream: %w", err)
 		}
 		select {
 		case <-ctx.Done():
 			return lastID, ctx.Err()
 		default:
+		}
+	}
+}
+
+// readLine reads one line including its delimiter, refusing to buffer more than
+// max bytes. bufio.Reader.ReadString cannot be used here: it grows a string until
+// a newline arrives, so a server that never sends one turns the client into its
+// memory sink. ReadSlice bounds each step to the reader's buffer; this function
+// keeps appending until the line is complete or the cap is crossed.
+// readLine 读取一行（含分隔符），并拒绝缓冲超过 max 字节。这里不能用
+// bufio.Reader.ReadString：它会一直增长到一个换行到来为止，服务端只要不发换行，客户端
+// 就成了它的内存池。ReadSlice 把每一步限制在 reader 缓冲区内，本函数持续追加，直到整行
+// 读完或越过上限。
+func readLine(r *bufio.Reader, max int64) (string, error) {
+	var line []byte
+	for {
+		frag, err := r.ReadSlice('\n')
+		if int64(len(line))+int64(len(frag)) > max {
+			return "", fmt.Errorf("%w: line over %d bytes", ErrEventTooLarge, max)
+		}
+		line = append(line, frag...)
+		switch {
+		case err == nil:
+			return string(line), nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			continue
+		default:
+			// EOF or a read error, with whatever arrived: the caller processes the
+			// partial line first and then handles the error, just like the
+			// ReadString version did.
+			// EOF 或读错误，附带已到达的内容：调用方先处理这段不完整的行，再处理错误，
+			// 与原先 ReadString 的行为一致。
+			return string(line), err
 		}
 	}
 }
