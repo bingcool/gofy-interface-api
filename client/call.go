@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 
 	"github.com/bingcool/gofy-interface-api/contracts/common/endpoint"
@@ -71,11 +72,15 @@ func newCallOptions(opts []CallOption) callOptions {
 }
 
 func (c *Client) callContext(ctx context.Context, options callOptions) (context.Context, context.CancelFunc) {
-	timeout := options.timeout
-	if timeout == 0 {
-		timeout = c.timeout
+	timeout := c.timeout
+	if options.timeoutSet {
+		timeout = options.timeout
 	}
 	if timeout <= 0 {
+		// NoTimeout (Config or WithTimeout) means the caller's context is the
+		// only deadline, so no derived timer is installed.
+		// NoTimeout（配置或 WithTimeout）表示只由调用方 ctx 决定截止时间，因此
+		// 不派生计时器。
 		return ctx, func() {}
 	}
 	return context.WithTimeout(ctx, timeout)
@@ -171,7 +176,18 @@ func decodeResponse[Res any](resp *http.Response, spec endpoint.Spec, max int64)
 			return nil, apiError(resp.StatusCode, env, body)
 		}
 		if isEmptyData(env.Data) {
-			return nil, nil
+			// Only "no body" routes (NoContent or the NoBody placeholder) and
+			// pointer response types can represent "no data". For a value type a
+			// missing payload means the server broke the contract; returning
+			// (nil, nil) would hand the caller a nil pointer it is about to
+			// dereference.
+			// 只有"无响应体"路由（NoContent 或 NoBody 占位类型）与指针响应类型能表达
+			// "没有数据"。值类型响应缺少 payload 意味着服务端违反了契约；返回
+			// (nil, nil) 会让调用方解引用空指针。
+			if spec.NoContent || isPointerResponse[Res]() || isNoBodyResponse[Res]() {
+				return nil, nil
+			}
+			return nil, &ProtocolError{Message: "missing data payload"}
 		}
 		var out Res
 		if err := json.Unmarshal(env.Data, &out); err != nil {
@@ -206,6 +222,24 @@ func isEmptyData(data json.RawMessage) bool {
 	trimmed := strings.TrimSpace(string(data))
 	return trimmed == "" || trimmed == "null"
 }
+
+// isPointerResponse reports whether Res can hold a nil, i.e. whether "no data"
+// has a natural representation for the caller.
+// isPointerResponse 判断 Res 能否为 nil，也就是"没有数据"对调用方是否有自然的
+// 表示形式。
+func isPointerResponse[Res any]() bool {
+	return reflect.TypeOf((*Res)(nil)).Elem().Kind() == reflect.Pointer
+}
+
+// isNoBodyResponse reports whether Res is the endpoint.NoBody placeholder that
+// marks a route without a JSON response.
+// isNoBodyResponse 判断 Res 是否为 endpoint.NoBody 占位类型，它标记没有 JSON 响应
+// 的路由。
+func isNoBodyResponse[Res any]() bool {
+	return reflect.TypeOf((*Res)(nil)).Elem() == noBodyType
+}
+
+var noBodyType = reflect.TypeOf(endpoint.NoBody{})
 
 func readLimited(r io.Reader, max int64) ([]byte, error) {
 	if max <= 0 {

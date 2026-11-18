@@ -40,6 +40,18 @@ import (
 // 一个版本号只会多出第二个需要维护的数字。
 const Version = interfaceapi.Version
 
+// NoTimeout disables the per-call deadline: only the caller's context bounds
+// the request. It is a sentinel because the zero value already means "use the
+// default"; pass it as Config.Timeout or to WithTimeout.
+// NoTimeout 关闭每调用 deadline，只由调用方 ctx 限制请求时长。它是个哨兵值，
+// 因为零值已经表示"使用默认值"；把它用作 Config.Timeout 或传给 WithTimeout。
+const NoTimeout time.Duration = -1
+
+// NoRetry disables retries. Retry keeps its zero-means-default rule, so the
+// explicit "off" is a negative sentinel.
+// NoRetry 关闭重试。Retry 的零值仍表示"使用默认值"，显式关闭因此用负哨兵。
+const NoRetry = -1
+
 const (
 	defaultTimeout          = 30 * time.Second
 	defaultMaxResponseBytes = 10 << 20
@@ -84,8 +96,11 @@ type Config struct {
 	// 字段不生效，超时统一由每次调用的 context 控制。
 	HTTPClient *http.Client
 
-	// Timeout bounds ordinary requests. Default 30s.
-	// Timeout 限制普通请求的耗时，默认 30s。
+	// Timeout bounds ordinary requests. Zero means the 30s default,
+	// NoTimeout disables the deadline, and any other negative value is
+	// rejected.
+	// Timeout 限制普通请求的耗时。零值表示默认 30s，NoTimeout 关闭 deadline，
+	// 其余负值会被拒绝。
 	Timeout time.Duration
 
 	// MaxResponseBytes limits ordinary JSON bodies. Default 10 MiB.
@@ -100,8 +115,10 @@ type Config struct {
 	MaxMultipartBytes int64
 
 	// Retry is the maximum number of retries for replayable requests.
-	// Default 1 (two attempts total).
-	// Retry 是可重放请求的最大重试次数，默认 1（共两次尝试）。
+	// Zero means the default (1, two attempts total); NoRetry disables retries;
+	// any other negative value is rejected.
+	// Retry 是可重放请求的最大重试次数。零值表示默认值（1，共两次尝试），
+	// NoRetry 关闭重试，其余负值会被拒绝。
 	Retry int
 
 	// Resolver is used when BaseURL is empty.
@@ -184,9 +201,8 @@ func New(cfg Config) (*Client, error) {
 	}
 	if cfg.Timeout == 0 {
 		cfg.Timeout = defaultTimeout
-	}
-	if cfg.Timeout < 0 {
-		return nil, errors.New("client: Timeout must not be negative")
+	} else if cfg.Timeout < 0 && cfg.Timeout != NoTimeout {
+		return nil, errors.New("client: Timeout must be positive, zero (default) or NoTimeout")
 	}
 	if cfg.MaxResponseBytes == 0 {
 		cfg.MaxResponseBytes = defaultMaxResponseBytes
@@ -200,10 +216,12 @@ func New(cfg Config) (*Client, error) {
 	if cfg.MaxMultipartBytes < 0 {
 		return nil, errors.New("client: MaxMultipartBytes must not be negative")
 	}
-	if cfg.Retry < 0 {
-		return nil, errors.New("client: Retry must not be negative")
-	}
-	if cfg.Retry == 0 {
+	switch {
+	case cfg.Retry == NoRetry:
+		cfg.Retry = 0
+	case cfg.Retry < 0:
+		return nil, errors.New("client: Retry must be non-negative or NoRetry")
+	case cfg.Retry == 0:
 		cfg.Retry = defaultRetry
 	}
 	if cfg.UserAgent == "" {
@@ -310,14 +328,21 @@ func (c *Client) httpClientFor(opts callOptions) (*http.Client, error) {
 		c.callMu.Unlock()
 		return &derived, nil
 	}
-	c.callMu.Unlock()
 
-	// The cache is full. Refusing to store keeps it bounded when a caller feeds
-	// arbitrary durations; the call still works, it just does not get a pool of
-	// its own to keep. Without this the map grows for the life of the process
-	// with no way to shrink it.
-	// 缓存已满。不写入是了在有调用方传入任意 duration 时保持有界；本次调用照常工作，
-	// 只是不保留专属连接池。没有这一层，map 会随进程寿命无界增长且无法收缩。
+	// The cache is full. Evict one entry and release its idle connections, then
+	// store the new pool: refusing to store would hand out a transport nobody
+	// ever closes, leaking a pool per distinct duration beyond the bound.
+	// A pool evicted here is rebuilt (and its connections re-dialed) on demand.
+	// 缓存已满。淘汰一条并释放它的空闲连接，再存入新池：拒绝写入会交出一个永远
+	// 没人关闭的 transport，让超限后的每个不同取值都泄漏一个连接池。被淘汰的池
+	// 在下次用到时按需重建（连接重新拨号）。
+	for evicted, oldClient := range c.callClients {
+		delete(c.callClients, evicted)
+		oldClient.CloseIdleConnections()
+		break
+	}
+	c.callClients[opts.connectTimeout] = &derived
+	c.callMu.Unlock()
 	return &derived, nil
 }
 

@@ -15,6 +15,7 @@ type callOptions struct {
 	requestID      string
 	query          url.Values
 	timeout        time.Duration
+	timeoutSet     bool
 	connectTimeout time.Duration
 	httpClient     *http.Client
 	pathPrefix     string
@@ -77,30 +78,37 @@ func WithPathPrefix(prefix string) CallOption {
 }
 
 // WithTimeout bounds one ordinary call, including retries and the response
-// body read. It overrides Client.Timeout. Streaming calls ignore it, because
-// their context governs how long the stream stays open; use WithConnectTimeout
-// to bound the handshake there.
+// body read. It overrides Client.Timeout; WithTimeout(0) or NoTimeout disables
+// the deadline for this call, leaving only the caller's context. Streaming
+// calls ignore it, because their context governs how long the stream stays
+// open; use WithConnectTimeout to bound the handshake there.
 // WithTimeout 限制单次普通调用的耗时，包含重试和响应体读取，优先级高于
-// Client.Timeout。流式调用忽略它（流的存活时长由 context 决定），需要限制
-// 握手时改用 WithConnectTimeout。
+// Client.Timeout。WithTimeout(0) 或 NoTimeout 关闭本次调用的 deadline，只由调用方
+// ctx 决定；流式调用忽略它（流的存活时长由 context 决定），需要限制握手时改用
+// WithConnectTimeout。
 func WithTimeout(d time.Duration) CallOption {
-	return func(o *callOptions) { o.timeout = d }
+	return func(o *callOptions) {
+		o.timeout = d
+		o.timeoutSet = true
+	}
 }
 
 // WithConnectTimeout bounds the TCP dial for one call. Calls that request the
 // same duration share a transport, so their connections are pooled together;
 // each distinct duration keeps its own pool, and the cache holds at most
-// maxDerivedClients pools — beyond that a call still works but gets a one-off
-// pool instead of a permanent one. The value is expected to come from a small
-// set of settings, not from user input. The configured *http.Client must use an
-// *http.Transport (the default does), otherwise the call fails with an error.
-// It does not change the TLS handshake timeout, and Close releases the pools
-// this option created.
+// maxDerivedClients pools. When the cache is full one entry is evicted and its
+// idle connections are closed, then the new pool takes its place; a pool
+// evicted that way is rebuilt on demand. The value is expected to come from a
+// small set of settings, not from user input. The configured *http.Client must
+// use an *http.Transport (the default does), otherwise the call fails with an
+// error. It does not change the TLS handshake timeout, and Close releases the
+// pools this option created.
 // WithConnectTimeout 限制单次调用的 TCP 拨号耗时。相同取值的调用共用 transport
-// 与连接池，不同取值各自保留连接池；缓存最多保留 maxDerivedClients 个，超出后调用
-// 照常可用，只是拿到一次性的池而不是长期保留。它面向少量固定的配置取值，不适合传
-// 用户输入。配置的 *http.Client 必须使用 *http.Transport（默认实现满足），否则调用
-// 直接报错。它不改变 TLS 握手超时；Close 会释放本选项创建的连接池。
+// 与连接池，不同取值各自保留连接池；缓存最多保留 maxDerivedClients 个，满时淘汰
+// 一条并关闭它的空闲连接，新池顶替其位置，被淘汰的池在下次用到时按需重建。它面向
+// 少量固定的配置取值，不适合传用户输入。配置的 *http.Client 必须使用
+// *http.Transport（默认实现满足），否则调用直接报错。它不改变 TLS 握手超时；
+// Close 会释放本选项创建的连接池。
 func WithConnectTimeout(d time.Duration) CallOption {
 	return func(o *callOptions) { o.connectTimeout = d }
 }
