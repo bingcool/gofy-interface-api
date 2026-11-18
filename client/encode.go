@@ -53,13 +53,23 @@ func (c *Client) buildRequest(ctx context.Context, base string, spec endpoint.Sp
 	// 调用方重复传入。WithPathPrefix 保留为更外层的额外前缀（例如网关挂载点）。
 	path = endpoint.JoinPath(spec.Prefix, path)
 	path = joinPathPrefix(opts.pathPrefix, path)
-	target := base
-	if path != "" {
-		if !strings.HasPrefix(path, "/") {
-			target += "/"
-		}
-		target += path
+
+	// The base is parsed before the route path is joined: a base like
+	// "http://h?token=x" carries the token in the query, and appending the path
+	// as text would land it inside the query value ("token=x/orders").
+	// 先解析 base 再拼接路由路径：像 "http://h?token=x" 这样的 base 把 token 放在
+	// query 里，按文本追加路径会把它落进 query 值（"token=x/orders"）。
+	u, err := url.Parse(base)
+	if err != nil {
+		return nil, fmt.Errorf("client: invalid url %q: %w", base, err)
 	}
+	escaped := joinEscapedPath(u.EscapedPath(), path)
+	decoded, err := url.PathUnescape(escaped)
+	if err != nil {
+		return nil, fmt.Errorf("client: invalid url path %q: %w", escaped, err)
+	}
+	u.Path = decoded
+	u.RawPath = escaped
 
 	query := url.Values{}
 	if wantsQuery(method) && req != nil {
@@ -72,13 +82,17 @@ func (c *Client) buildRequest(ctx context.Context, base string, spec endpoint.Sp
 			query.Add(key, value)
 		}
 	}
-
-	u, err := url.Parse(target)
-	if err != nil {
-		return nil, fmt.Errorf("client: invalid url %q: %w", target, err)
-	}
 	if len(query) > 0 {
-		u.RawQuery = query.Encode()
+		baseQuery, err := url.ParseQuery(u.RawQuery)
+		if err != nil {
+			return nil, fmt.Errorf("client: invalid base query %q: %w", u.RawQuery, err)
+		}
+		for key, values := range query {
+			for _, value := range values {
+				baseQuery.Add(key, value)
+			}
+		}
+		u.RawQuery = baseQuery.Encode()
 	}
 
 	body, contentType, err := encodeBody(spec, req, c.maxMultipart)
@@ -166,6 +180,24 @@ func joinPathPrefix(prefix, path string) string {
 		path = "/" + path
 	}
 	return prefix + path
+}
+
+// joinEscapedPath joins a base path and an already-escaped route path. The route
+// path comes from substitutePath, where uri parameters went through
+// url.PathEscape, so the join happens on the escaped form: treating it as a
+// plain path would escape the escape again ("a%2Fb" becomes "a%252Fb").
+// joinEscapedPath 拼接基础路径与已转义的路由路径。路由路径来自 substitutePath，其中
+// uri 参数已用 url.PathEscape 转义，因此要在转义形态上拼接：若当作普通路径处理，
+// 转义符会被再次转义（"a%2Fb" 变成 "a%252Fb"）。
+func joinEscapedPath(base, path string) string {
+	if path == "" {
+		return base
+	}
+	base = strings.TrimRight(base, "/")
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return base + path
 }
 
 func wantsQuery(method string) bool {
