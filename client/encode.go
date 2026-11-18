@@ -413,7 +413,12 @@ func substitutePath(path string, req any) (string, error) {
 	values := make(map[string]string)
 	if err := walkStruct(reflect.ValueOf(req), func(field reflect.StructField, value reflect.Value) error {
 		name, _ := parseTag(field.Tag.Get("uri"))
-		if name == "" || name == "-" || isZero(value) {
+		// A nil pointer means "not provided"; a zero value does not, because 0 and
+		// false are ordinary path values. Empty strings are still rejected by the
+		// placeholder check below — an empty path segment is not a value.
+		// nil 指针表示"没提供"，零值不算缺失——0 和 false 都是普通的路径取值。空字符串
+		// 仍由下面的占位符检查拦下：空的路径段不是一个值。
+		if name == "" || name == "-" || isNilValue(value) {
 			return nil
 		}
 		text, err := stringify(value)
@@ -585,17 +590,31 @@ func parseTag(tag string) (string, map[string]bool) {
 }
 
 func isZero(v reflect.Value) bool {
-	for v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
-		if v.IsNil() {
-			return true
-		}
-		v = v.Elem()
-	}
 	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface:
+		// Presence is the signal. Passing *int(0) or *bool(false) is how a caller
+		// says "this filter is explicitly zero", which is a different statement
+		// from leaving the field nil; only nil means "not provided".
+		// 存在性本身就是信号。传 *int(0) 或 *bool(false) 是调用方在说"这个过滤条件
+		// 就是零值"，与把字段留成 nil 是两回事；只有 nil 才表示没有提供。
+		return v.IsNil()
 	case reflect.Slice, reflect.Map:
 		return v.IsNil() || v.Len() == 0
 	}
 	return v.IsZero()
+}
+
+// isNilValue reports a nil pointer or interface without looking at what it
+// points to. It is the existence test for fields whose zero value is a legitimate
+// argument — path parameters, where 0 and false are values, not absences.
+// isNilValue 只看指针/接口本身是否为 nil，不关心它指向什么。它是"存在性"判断，用于
+// 零值本身就是合法取值的字段——路径参数里的 0 和 false 是值，不是缺失。
+func isNilValue(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface:
+		return v.IsNil()
+	}
+	return false
 }
 
 func stringify(v reflect.Value) (string, error) {

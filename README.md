@@ -38,6 +38,11 @@ stamped 前缀与分组一致。
 `validate:"omitempty"` → 可选；其余非指针字段默认必填。必填字段的零值也会
 发送（multipart 中缺失的文件除外），`uri` 标签字段不会再重复进 query。
 
+指针字段的"存在"与"零值"是两件事：非 nil 指针一律发送，`*int(0)` 与
+`*bool(false)` 是调用方明确给出的取值；只有 nil 才表示未提供。`uri` 路径参数
+同理——`0` 和 `false` 是值，不是缺失，只有 nil 指针或空字符串才算没给
+（后者报 `path parameter "x" is missing`）。
+
 ## 本地联调
 
 本库不依赖任何本地仓库，`go.mod` 没有 `replace`，可直接：
@@ -84,3 +89,4 @@ make check     # fmt-check + vet + test-race + refcheck
 SSE 的正常 EOF 视为断连：按 `Retry` 重新解析地址，并带 `Last-Event-ID`
 续传；重试预算用尽后向错误 channel 投递 `ErrStreamEnded`。主动停止请取消
 context，此时流直接结束且不报错。
+
