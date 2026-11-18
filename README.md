@@ -6,7 +6,7 @@
 客户端）、`docgen/`（OpenAPI 生成）、`docsui/`（Swagger UI）与 `cmd/`（校验、
 预览、分层引用检查）。
 
-本库 `go.mod` **不含 gofy，也不含 gin**。把契约绑定到 gofy 框架的
+本库 `go.mod` **不含 gofy、gin 与 gofy-adapter**。把契约绑定到 gofy 框架的
 `adapter/gofy` 与基于 Nacos 的服务发现 `client/nacos` 已迁至独立库
 `gofy-adapter`；业务契约（`appinterface/`）与生成物（`openapi/`）
 由各项目自己的契约 module 维护，生成入口是项目侧 `cmd/openapi`。
@@ -51,10 +51,22 @@ make check     # fmt-check + vet + test-race + refcheck
 - `contracts/**` 只依赖标准库；`client/**` 不依赖任何框架；
 - `docgen/**` 限于 contracts、kin-openapi、yaml；`docsui/**` 限于 swgui；
 - `cmd/**` 可引用库内任意包；
-- **全库禁止 import `gofy` 与 `gin`**，禁止 `func init()`。
+- **全库禁止 import `gofy`、`gin` 与 `gofy-adapter`**（adapter 依赖本库，
+  反向引用既是循环依赖也是分层违规），禁止 `func init()`。
 
 规则由 `cmd/refcheck -mode library` 强制；项目侧用 `-mode contracts`
 校验自己的 `appinterface/`。
+
+## 超时、重试与空 data
+
+`Config.Timeout` / `Config.Retry` 的零值表示默认值；显式关闭用哨兵
+`client.NoTimeout` 与 `client.NoRetry`（值为 `-1`），其余负值在 `New` 时
+被拒绝。`WithTimeout(0)` 与 `NoTimeout` 等效：本次调用只受调用方 context
+限制。
+
+成功信封没有 `data`（缺失或为 `null`）时，只有 `NoContent` 路由、
+`endpoint.NoBody` 占位响应与指针响应类型返回 `(nil, nil)`；值类型响应得到
+`*ProtocolError`，不再把调用方即将解引用的空指针交出去。
 
 ## 流式调用
 
