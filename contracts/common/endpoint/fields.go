@@ -2,6 +2,7 @@ package endpoint
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 )
 
@@ -58,10 +59,5 @@ func PathParamName(field reflect.StructField) string {
 
 func hasTagOption(tag, option string) bool {
 	parts := strings.Split(tag, ",")
-	for _, part := range parts[1:] {
-		if part == option {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(parts[1:], option)
 }
