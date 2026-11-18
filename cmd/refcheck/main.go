@@ -2,8 +2,9 @@
 // a project's contract module.
 //
 // In library mode each directory is checked against the rules in §4.3. The
-// library is framework independent: gofy and gin are denied everywhere, because
-// the gofy adapter and the Nacos resolver now live in gofy-adapter.
+// library is framework independent: gofy, gin and gofy-adapter are denied
+// everywhere, because the gofy adapter and the Nacos resolver now live in
+// gofy-adapter and depend on this module.
 // contracts may import only the standard library and contracts/**; client/**
 // additionally allows contracts/**, client/** and the module root package (it
 // reads Version for the User-Agent); docgen is limited to
@@ -16,8 +17,9 @@
 // out of the business contract layer, and init() is forbidden as well.
 // 命令 refcheck 校验 gofy-interface-api 与项目契约模块的分层边界。
 //
-// library 模式按 §4.3 逐目录检查。本库与框架无关：gofy 与 gin 在全库范围内
-// 禁止，因为 gofy adapter 与 Nacos resolver 已迁至 gofy-adapter。
+// library 模式按 §4.3 逐目录检查。本库与框架无关：gofy、gin 与 gofy-adapter
+// 在全库范围内禁止，因为 gofy adapter 与 Nacos resolver 已迁至 gofy-adapter
+// 且依赖本模块。
 // contracts 只允许标准库与 contracts/**；client 增加 contracts/** 与 client/**；
 // docgen 限于 contracts、kin-openapi 与 yaml；docsui 限于 swgui；cmd 可 import
 // 库内任意包。任何文件都不得声明 init()。
@@ -52,6 +54,13 @@ var forbiddenFrameworkImports = []string{
 }
 
 const adapterModule = "github.com/bingcool/gofy-adapter"
+
+// libraryDeny is the deny list of every library rule, cmd included: the adapter
+// depends on this module, so the reverse edge is a cycle as well as a layering
+// violation. Deny runs before allowAll, which is what keeps cmd covered.
+// libraryDeny 是所有 library 规则（含 cmd）共用的 deny 列表：adapter 依赖本模块，
+// 反向引用既是循环依赖也是分层违规。deny 先于 allowAll 检查，cmd 因此同样被覆盖。
+var libraryDeny = append(append([]string{}, forbiddenFrameworkImports...), adapterModule)
 
 type rule struct {
 	name     string
@@ -145,7 +154,7 @@ func libraryRules(root, api string) []rule {
 	}
 	for i := range rs {
 		rs[i].testAllow = []string{api}
-		rs[i].deny = forbiddenFrameworkImports
+		rs[i].deny = libraryDeny
 	}
 	return rs
 }

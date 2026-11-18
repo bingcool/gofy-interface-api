@@ -65,11 +65,14 @@ func TestDeniedFrameworkImports(t *testing.T) {
 		{"github.com/gin-gonic/gin", true},
 		{"github.com/bingcool/gofy-interface-api/contracts/common/endpoint", false},
 		{"github.com/bingcool/gofy-interface-api/client", false},
-		{"github.com/bingcool/gofy-adapter/adapter/gofy", false},
+		{"github.com/bingcool/gofy-adapter/adapter/gofy", true},
+		{"github.com/bingcool/gofy-adapter/client/nacos", true},
+		{adapterModule, true},
+		{"github.com/bingcool/gofy-adapters", false},
 		{"context", false},
 	}
 	for _, tc := range cases {
-		if got := isDenied(tc.imp, forbiddenFrameworkImports); got != tc.want {
+		if got := isDenied(tc.imp, libraryDeny); got != tc.want {
 			t.Errorf("isDenied(%q) = %v, want %v", tc.imp, got, tc.want)
 		}
 	}
@@ -79,6 +82,9 @@ func TestLibraryRulesApplyFrameworkDenyEverywhere(t *testing.T) {
 	for _, r := range libraryRules(".", defaultAPIModule) {
 		if len(r.deny) == 0 {
 			t.Errorf("%s has no framework deny list", r.name)
+		}
+		if !isDenied(adapterModule+"/adapter/gofy", r.deny) {
+			t.Errorf("%s does not deny the adapter module", r.name)
 		}
 	}
 }
