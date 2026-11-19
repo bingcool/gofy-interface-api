@@ -40,25 +40,14 @@ func (c *buildContext) operation(desc endpoint.Descriptor, spec endpoint.Spec) (
 	if spec.Deprecated {
 		op["deprecated"] = true
 	}
-	hasAuth := spec.Auth == endpoint.AuthRequired || spec.Auth == endpoint.AuthOptional
-	switch spec.Auth {
-	case endpoint.AuthRequired:
-		op["security"] = []any{map[string]any{c.cfg.securityScheme(): []any{}}}
-	case endpoint.AuthOptional:
-		// Optional means "validate when credentials are present, let requests
-		// through when they are absent": a requirement carrying the scheme and an
-		// empty requirement (anonymous) are alternatives, not a mandatory
-		// credential. Emitting only the former would make OpenAPI readers treat
-		// the operation as Required.
-		// Optional 表示“有凭证则校验、无凭证放行”：带认证方案的 requirement 与
-		// 空 requirement（匿名）是二选一，不是必须携带凭证。只写前者会让
-		// OpenAPI 使用者误判成 Required。
-		op["security"] = []any{
-			map[string]any{c.cfg.securityScheme(): []any{}},
-			map[string]any{},
-		}
-	}
-
+	// No security block is emitted here. Authentication is installed by
+	// middleware declared on the group or the route (group.Use("auth")), so the
+	// contract has no auth field to translate: a route that installs "auth"
+	// should also declare a 401 in Spec.Errors, which is the only place the
+	// document learns about it.
+	// 这里不生成 security。认证由分组或路由声明的中间件安装（group.Use("auth")），
+	// 契约没有可翻译的认证字段：装了 "auth" 的路由应当在 Spec.Errors 里声明 401，
+	// 那是文档得知这件事的唯一来源。
 	params, err := c.parameters(desc.RequestType(), spec.Method)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", spec.OperationID, err)
@@ -79,7 +68,7 @@ func (c *buildContext) operation(desc endpoint.Descriptor, spec endpoint.Spec) (
 		op["requestBody"] = body
 	}
 
-	responses, err := c.responses(desc, spec, hasAuth)
+	responses, err := c.responses(desc, spec)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", spec.OperationID, err)
 	}
@@ -258,7 +247,7 @@ func (c *buildContext) requestBody(reqType reflect.Type, spec endpoint.Spec) (ma
 	}, nil
 }
 
-func (c *buildContext) responses(desc endpoint.Descriptor, spec endpoint.Spec, hasAuth bool) (map[string]any, error) {
+func (c *buildContext) responses(desc endpoint.Descriptor, spec endpoint.Spec) (map[string]any, error) {
 	out := map[string]any{}
 	var success map[string]any
 	var err error
@@ -286,9 +275,6 @@ func (c *buildContext) responses(desc endpoint.Descriptor, spec endpoint.Spec, h
 	faults := map[int][]endpoint.ErrorSpec{
 		400: {{Code: int(errcode.CodeInvalidArgument), Status: 400, Message: "invalid argument"}},
 		500: {{Code: int(errcode.CodeInternal), Status: 500, Message: "internal error"}},
-	}
-	if hasAuth {
-		faults[401] = []endpoint.ErrorSpec{{Code: int(errcode.CodeUnauthorized), Status: 401, Message: "unauthorized"}}
 	}
 	if spec.RateLimit != nil {
 		faults[429] = []endpoint.ErrorSpec{{Code: int(errcode.CodeTooManyRequests), Status: 429, Message: "too many requests"}}

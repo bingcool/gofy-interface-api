@@ -86,15 +86,14 @@ type ConfigResponse struct {
 }
 
 var (
-	// GetItem covers path parameters, auth marking and declared errors.
-	// GetItem 覆盖路径参数、认证标记与错误声明。
+	// GetItem covers path parameters and declared errors.
+	// GetItem 覆盖路径参数与错误声明。
 	GetItem = endpoint.New[ItemRequest, ItemResponse](endpoint.Spec{
 		OperationID: "GetItem",
 		Method:      http.MethodGet,
 		Path:        "/api/test/items/{id}",
 		Summary:     "get one item",
 		Tags:        []string{ServiceName},
-		Auth:        endpoint.AuthRequired,
 		Errors: []endpoint.ErrorSpec{
 			{Code: ErrCodeNotFound, Status: http.StatusNotFound, Message: "item not found"},
 		},
@@ -138,15 +137,16 @@ var (
 		},
 	})
 
-	// GetConfig is an anonymous route with optional auth.
-	// GetConfig 是匿名可访问、认证可选的路由。
+	// GetConfig is a route in a group without middleware: the group below
+	// declares none, so the adapter installs nothing for it.
+	// GetConfig 是不带中间件的分组里的路由：下面的分组没有声明中间件，
+	// 因此 adapter 不会为它安装任何中间件。
 	GetConfig = endpoint.New[ConfigRequest, ConfigResponse](endpoint.Spec{
 		OperationID: "GetConfig",
 		Method:      http.MethodGet,
 		Path:        "/api/test/config",
 		Summary:     "read config",
 		Tags:        []string{ServiceName},
-		Auth:        endpoint.AuthOptional,
 	})
 
 	// Items declares group middleware names and keeps route declaration order.

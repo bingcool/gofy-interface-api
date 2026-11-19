@@ -13,7 +13,7 @@ package endpoint
 //	var GetOrder = endpoint.Get[orderrequest.GetOrderRequest, orderresponse.GetOrderResponse](
 //	    "/orders/{id}", func(spec *endpoint.Spec) {
 //	        spec.OperationID = "GetOrder"
-//	        spec.Auth = endpoint.AuthRequired
+//	        spec.Summary = "query one order"
 //	    })
 //
 // 泛型参数仍是请求/响应类型，Go 无法从路径推断；需要复用时照旧把返回值存成

@@ -37,12 +37,10 @@ func TestHTTPMethodHelpers(t *testing.T) {
 func TestHTTPHelperBuildsMetadata(t *testing.T) {
 	route := endpoint.Get[testReq, testRes]("/orders/{id}", func(spec *endpoint.Spec) {
 		spec.OperationID = "GetOrder"
-		spec.Auth = endpoint.AuthRequired
 		spec.Path = "/override" // build 可以覆盖默认值与路径
 	})
 	spec := route.Spec()
-	if spec.Method != "GET" || spec.Path != "/override" || spec.OperationID != "GetOrder" ||
-		spec.Auth != endpoint.AuthRequired {
+	if spec.Method != "GET" || spec.Path != "/override" || spec.OperationID != "GetOrder" {
 		t.Fatalf("spec = %+v", spec)
 	}
 	if route.RequestType().NumField() != 0 {

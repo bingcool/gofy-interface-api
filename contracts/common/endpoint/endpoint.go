@@ -1,8 +1,8 @@
 // Package endpoint defines framework-neutral typed route descriptors.
 //
 // The contract layer uses Route[Req, Res] to declare what a route is: HTTP
-// method, path, request/response types, auth and rate-limit metadata, error
-// declarations and so on. One declaration is consumed in four places:
+// method, path, request/response types, rate-limit metadata, error declarations
+// and so on. One declaration is consumed in four places:
 //
 //   - appinterface: stores Routes as package-level variables, declaring the
 //     business contract;
@@ -25,7 +25,7 @@
 // Package endpoint 定义与框架无关的类型化路由描述符。
 //
 // 契约层用 Route[Req, Res] 声明一条路由“是什么”：HTTP 方法、路径、请求/响应
-// 类型、认证与限流元数据、错误声明等。同一份声明被四处消费：
+// 类型、限流元数据、错误声明等。同一份声明被四处消费：
 //
 //   - appinterface：把 Route 存成包级变量，声明业务契约；
 //   - apicore/adapter/gofy：BindGroup / BindAll 把描述符绑定到 gofy 路由，
@@ -44,47 +44,6 @@ package endpoint
 import (
 	"reflect"
 	"strings"
-)
-
-// AuthMode describes the documentation-level auth requirement of a route.
-//
-// Note: AuthMode only affects the OpenAPI security marking, documentation and
-// optional startup validation; the adapter never attaches auth middleware
-// merely because the field is AuthRequired. Routes that need auth must declare
-// the middleware explicitly (group.Use("auth") or spec.Middleware =
-// []string{"auth"}), with the concrete implementation registered by the server
-// and injected through the middleware registry. The contract thus only says
-// "auth is required" without binding to one framework's auth implementation;
-// the server adapter can validate at startup that declarations match the
-// installed auth policy (gofyadapter.BindOptions.AuthValidator).
-// AuthMode 描述路由在文档层面的认证要求。
-//
-// 注意：AuthMode 只影响 OpenAPI 的 security 标记、文档展示和可选的启动期
-// 校验，adapter 不会因为字段是 AuthRequired 就自动附加认证中间件。需要认证的
-// 路由必须显式声明中间件（group.Use("auth") 或 spec.Middleware =
-// []string{"auth"}），具体实现由服务端注册到中间件注册表后注入。这样契约只
-// 表达“要认证”，不绑定某个框架的认证实现；服务端适配层可以在启动时校验声明
-// 与实际安装的认证策略是否一致（gofyadapter.BindOptions.AuthValidator）。
-type AuthMode string
-
-const (
-	// AuthNone declares no auth requirement (the zero value: leaving the field
-	// empty selects it).
-	// AuthNone 表示契约不声明认证要求（零值：字段留空即是它）。
-	AuthNone AuthMode = ""
-	// AuthRequired marks the route as needing an authenticated identity; OpenAPI
-	// emits a security requirement.
-	// AuthRequired 表示该路由需要已认证身份；OpenAPI 中生成 security 要求。
-	AuthRequired AuthMode = "required"
-	// AuthOptional means "validate credentials when present, allow anonymous
-	// otherwise"; OpenAPI emits a choice between the auth-scheme requirement and
-	// an empty (anonymous) requirement instead of only the former as
-	// AuthRequired does. The server auth middleware must support anonymous
-	// access.
-	// AuthOptional 表示该路由“有凭证则校验、无凭证放行”；OpenAPI 中生成
-	// “认证方案 requirement”与“空 requirement（匿名）”二选一，而不是像
-	// AuthRequired 那样只生成前者。服务端认证中间件需要支持匿名访问。
-	AuthOptional AuthMode = "optional"
 )
 
 // RateKey is the counting subject of rate limiting; the server limiter uses it
@@ -170,14 +129,15 @@ type RateLimit struct {
 //
 // It only drives documentation and takes no part in runtime rendering: the
 // actual response comes from business errors (errcode.Fault / apperr.Error).
-// Entries with Status 0 are ignored by docgen; 400 / 500 plus the 401 / 429
-// derived from Auth and RateLimit are added automatically, so usually only
-// business-specific errors need declaring here (e.g. 404 order not found).
+// Entries with Status 0 are ignored by docgen; 400 / 500 plus the 429 derived
+// from RateLimit are added automatically, so usually only business-specific
+// errors need declaring here (e.g. 404 order not found). A 401 belongs here
+// once the route installs an auth middleware.
 // ErrorSpec 声明一种预期错误，用于 OpenAPI 的 responses 文档。
 //
 // 它只描述文档，不参与运行时响应渲染：真实返回由业务错误（errcode.Fault /
 // apperr.Error）决定。Status 为 0 的条目会被 docgen 忽略；400 / 500 以及
-// 按 Auth、RateLimit 推导出的 401 / 429 会自动补充，这里通常只需声明业务
+// 按 RateLimit 推导出的 429 会自动补充，这里通常只需声明业务
 // 特有的错误（如 404 订单不存在）。
 type ErrorSpec struct {
 	// Code is the business error code, matching the code field of the response
@@ -300,10 +260,6 @@ type Spec struct {
 	// BindOptions.Middleware 做单次覆盖），未注册的名字启动期报错。
 	// 分组中间件总是先于这里的路由中间件执行。
 	Middleware []string
-	// Auth is the documentation-level auth marking; see AuthMode. It never
-	// attaches middleware automatically.
-	// Auth 是文档层面的认证标记，见 AuthMode 的说明；不会自动挂中间件。
-	Auth AuthMode
 	// RateLimit nil means no rate limit is declared; a non-nil value is
 	// translated by the server's RateLimit callback into concrete middleware and
 	// makes docgen emit a 429 response.

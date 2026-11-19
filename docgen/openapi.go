@@ -51,7 +51,6 @@ func Build(routes []endpoint.Descriptor, cfg Config) (*Spec, error) {
 	paths := make(map[string]any)
 	seenOperation := make(map[string]bool, len(ordered))
 	seenRoute := make(map[string]bool, len(ordered))
-	needAuth := false
 	for _, entry := range ordered {
 		spec := entry.spec
 		if spec.OperationID == "" {
@@ -71,9 +70,6 @@ func Build(routes []endpoint.Descriptor, cfg Config) (*Spec, error) {
 		}
 		seenRoute[key] = true
 
-		if spec.Auth == endpoint.AuthRequired || spec.Auth == endpoint.AuthOptional {
-			needAuth = true
-		}
 		op, err := ctx.operation(entry.desc, spec)
 		if err != nil {
 			return nil, err
@@ -118,7 +114,7 @@ func Build(routes []endpoint.Descriptor, cfg Config) (*Spec, error) {
 		}
 	}
 	components["schemas"] = ctx.components
-	if schemes := securitySchemes(cfg, needAuth); len(schemes) > 0 {
+	if schemes := securitySchemes(cfg); len(schemes) > 0 {
 		components["securitySchemes"] = schemes
 	}
 	if len(components["schemas"].(map[string]any)) > 0 || len(components) > 1 {
@@ -301,7 +297,14 @@ func trimPathPrefix(path, prefix string) string {
 	return path
 }
 
-func securitySchemes(cfg Config, needAuth bool) map[string]any {
+// securitySchemes emits the schemes the caller configured. Nothing is inferred
+// from routes: without an auth field on the contract there is nothing to infer,
+// and a scheme no operation references would only suggest a requirement that
+// does not exist.
+// securitySchemes 只输出调用方显式配置的方案。不会从路由推断：契约没有认证字段，
+// 也就没有可推断的东西；而一个没有任何 operation 引用的方案，只会暗示一条并不存在的
+// 认证要求。
+func securitySchemes(cfg Config) map[string]any {
 	if len(cfg.SecuritySchemes) > 0 {
 		out := make(map[string]any, len(cfg.SecuritySchemes))
 		for name, scheme := range cfg.SecuritySchemes {
@@ -322,16 +325,7 @@ func securitySchemes(cfg Config, needAuth bool) map[string]any {
 		}
 		return out
 	}
-	if !needAuth {
-		return nil
-	}
-	return map[string]any{
-		DefaultSecurityScheme: map[string]any{
-			"type":         "http",
-			"scheme":       "bearer",
-			"bearerFormat": "JWT",
-		},
-	}
+	return nil
 }
 
 func commonEnvelope() map[string]any {

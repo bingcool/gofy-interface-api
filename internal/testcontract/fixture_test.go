@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/bingcool/gofy-interface-api/contracts/common/endpoint"
 	"github.com/bingcool/gofy-interface-api/internal/testcontract"
 )
 
@@ -32,13 +31,7 @@ func TestRoutesCoverRequiredShapes(t *testing.T) {
 	}
 }
 
-func TestAuthAndGroupDeclarations(t *testing.T) {
-	if got := testcontract.GetItem.Spec().Auth; got != endpoint.AuthRequired {
-		t.Fatalf("GetItem.Auth = %q, want required", got)
-	}
-	if got := testcontract.GetConfig.Spec().Auth; got != endpoint.AuthOptional {
-		t.Fatalf("GetConfig.Auth = %q, want optional", got)
-	}
+func TestGroupAndRateLimitDeclarations(t *testing.T) {
 	if testcontract.CreateItem.Spec().RateLimit == nil {
 		t.Fatal("CreateItem must declare a rate limit")
 	}

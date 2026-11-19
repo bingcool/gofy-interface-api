@@ -9,13 +9,6 @@ package docgen
 
 import "strings"
 
-const (
-	// DefaultSecurityScheme is used when a route declares Auth but Config does
-	// not define any scheme.
-	// DefaultSecurityScheme 在路由声明了 Auth、但 Config 未定义任何 scheme 时使用。
-	DefaultSecurityScheme = "bearerAuth"
-)
-
 // Server is one OpenAPI server entry.
 // Server 是 OpenAPI servers 数组中的一项。
 type Server struct {
@@ -43,10 +36,14 @@ type Config struct {
 	Description string
 	Servers     []Server
 
-	// SecuritySchemes maps a scheme name to its definition. When empty,
-	// bearerAuth (HTTP bearer) is emitted if any route requires auth.
-	// SecuritySchemes 把 scheme 名映射到定义。为空时，只要存在需要认证的路由，
-	// 就生成 bearerAuth（HTTP bearer）。
+	// SecuritySchemes maps a scheme name to its definition and is emitted into
+	// components.securitySchemes as given. No operation carries a security
+	// requirement, because authentication is installed by middleware and not
+	// declared in the contract; a scheme listed here documents the scheme's
+	// shape for readers and client generators.
+	// SecuritySchemes 把 scheme 名映射到定义，并原样写入 components.securitySchemes。
+	// 没有任何 operation 携带 security 要求，因为认证由中间件安装、不在契约里声明；
+	// 这里列出的方案用于向读者与客户端生成器说明认证方案的形状。
 	SecuritySchemes map[string]SecurityScheme
 
 	// Prefixes maps a service key such as "demoservice" to a deployment prefix
@@ -79,24 +76,6 @@ func (c Config) withDefaults() Config {
 		c.Version = "1.0.0"
 	}
 	return c
-}
-
-func (c Config) securityScheme() string {
-	if len(c.SecuritySchemes) == 0 {
-		return DefaultSecurityScheme
-	}
-	// Deterministic choice: prefer bearerAuth, otherwise the first key in
-	// sorted order.
-	// 选择必须可复现：优先 bearerAuth，否则取字典序第一个 key。
-	if _, ok := c.SecuritySchemes[DefaultSecurityScheme]; ok {
-		return DefaultSecurityScheme
-	}
-	names := make([]string, 0, len(c.SecuritySchemes))
-	for name := range c.SecuritySchemes {
-		names = append(names, name)
-	}
-	sortStrings(names)
-	return names[0]
 }
 
 func sortStrings(values []string) {
