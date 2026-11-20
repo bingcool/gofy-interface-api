@@ -40,10 +40,17 @@ func (d Date) MarshalJSON() ([]byte, error) {
 	return []byte(`"` + d.Format(dateLayout) + `"`), nil
 }
 
-// UnmarshalJSON implements json.Unmarshaler.
-// UnmarshalJSON 接受带引号的 yyyy-MM-dd 字符串，引号会被剥离；
-// 格式错误时返回带原值的包装错误，便于定位入参。
+// UnmarshalJSON implements json.Unmarshaler. A JSON null becomes the zero date:
+// clients commonly serialize an absent optional field as "date": null, and that
+// must not fail the whole request.
+// UnmarshalJSON 接受带引号的 yyyy-MM-dd 字符串，引号会被剥离；格式错误时返回带
+// 原值的包装错误，便于定位入参。JSON null 按零值处理：前端把可选字段序列化成
+// "date": null 是常见行为，不应让整个请求失败。
 func (d *Date) UnmarshalJSON(b []byte) error {
+	if strings.TrimSpace(string(b)) == "null" {
+		d.Time = time.Time{}
+		return nil
+	}
 	s := strings.Trim(string(b), `"`)
 	t, err := time.Parse(dateLayout, s)
 	if err != nil {

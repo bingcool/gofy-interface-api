@@ -20,10 +20,16 @@ func (v Uint64String) MarshalJSON() ([]byte, error) {
 	return []byte(`"` + strconv.FormatUint(uint64(v), 10) + `"`), nil
 }
 
-// UnmarshalJSON accepts a JSON string or a bare number.
-// UnmarshalJSON 同时接受 JSON 字符串与裸数字，引号会被剥离；
-// 负数或非法内容报错，错误信息带上原始入参便于排查。
+// UnmarshalJSON accepts a JSON string or a bare number. A JSON null becomes
+// zero: an optional id serialized as null should not fail the request.
+// UnmarshalJSON 同时接受 JSON 字符串与裸数字，引号会被剥离；负数或非法内容报错，
+// 错误信息带上原始入参便于排查。JSON null 按零值处理：可选 id 被序列化成 null
+// 不应让请求失败。
 func (v *Uint64String) UnmarshalJSON(b []byte) error {
+	if strings.TrimSpace(string(b)) == "null" {
+		*v = 0
+		return nil
+	}
 	s := strings.Trim(string(b), `"`)
 	n, err := strconv.ParseUint(s, 10, 64)
 	if err != nil {
@@ -56,10 +62,15 @@ func (v Int64String) MarshalJSON() ([]byte, error) {
 	return []byte(`"` + strconv.FormatInt(int64(v), 10) + `"`), nil
 }
 
-// UnmarshalJSON accepts a JSON string or a bare number.
-// UnmarshalJSON 同时接受 JSON 字符串与裸数字，引号会被剥离；
-// 非法内容返回带原始入参的错误，负值对 int64 是合法取值。
+// UnmarshalJSON accepts a JSON string or a bare number. A JSON null becomes
+// zero, for the same reason as Uint64String.
+// UnmarshalJSON 同时接受 JSON 字符串与裸数字，引号会被剥离；非法内容返回带原始
+// 入参的错误，负值对 int64 是合法取值。JSON null 按零值处理，原因同 Uint64String。
 func (v *Int64String) UnmarshalJSON(b []byte) error {
+	if strings.TrimSpace(string(b)) == "null" {
+		*v = 0
+		return nil
+	}
 	s := strings.Trim(string(b), `"`)
 	n, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
