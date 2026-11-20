@@ -47,10 +47,14 @@ type Download struct {
 // Events are delivered until the context is cancelled. A clean EOF counts as a
 // disconnect: the stream reconnects with Last-Event-ID until Retry is
 // exhausted, then ErrStreamEnded is delivered. The error channel receives at
-// most one error.
+// most one error. Auto-reconnect obeys the same idempotency gate as an ordinary
+// retry: a write method (POST/PUT/PATCH) without a non-empty Idempotency-Key is
+// not replayed after a disconnect.
 // StreamSSE 为声明为 endpoint.KindSSE 的路由发起 SSE 请求。事件持续投递，直到
 // context 取消。正常 EOF 也算断连：流会带 Last-Event-ID 重连，直到 Retry 用尽后
-// 投递 ErrStreamEnded。错误 channel 最多收到一个错误。
+// 投递 ErrStreamEnded。错误 channel 最多收到一个错误。自动重连遵循与普通重试相同
+// 的幂等判定：没有非空 Idempotency-Key 的写方法（POST/PUT/PATCH）在断连后不会被
+// 重放。
 func StreamSSE[Req any](
 	ctx context.Context,
 	c *Client,
@@ -68,6 +72,14 @@ func StreamSSE[Req any](
 		ctx = context.Background()
 	}
 	options := newCallOptions(opts)
+	// Reconnecting re-sends the request, so it must pass the same idempotency
+	// gate as an ordinary retry: a write without a key is never replayed, while
+	// a safe method or a keyed write may reconnect up to Retry times. Reuse
+	// retryFor instead of c.retry directly so the two paths cannot drift.
+	// 重连会重新发出请求，因此必须和普通重试一样经过幂等判定：无幂等键的写请求永不
+	// 重放，安全方法或带幂等键的写请求最多重连 Retry 次。这里复用 retryFor 而不是
+	// 直接用 c.retry，避免两条路径的判定出现偏差。
+	reconnectLimit := c.retryFor(ctx, rt.Spec().Method, req, options)
 	base, err := c.base(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -79,10 +91,16 @@ func StreamSSE[Req any](
 
 	events := make(chan Event)
 	errs := make(chan error, 1)
+	// Keep the last successfully opened response in its own variable. A failed
+	// reconnect assigns nil to resp, and closing that in the deferred cleanup
+	// would panic instead of returning the reconnect error.
+	// 用单独的变量保存最后一次成功打开的响应。重连失败会把 resp 赋成 nil，若在延迟清理里
+	// 关它就会 panic，而不是把重连错误正常返回。
+	latest := resp
 	go func() {
 		defer close(events)
 		defer close(errs)
-		defer func() { drainAndClose(resp) }()
+		defer func() { drainAndClose(latest) }()
 
 		lastID := ""
 		for attempt := 0; ; attempt++ {
@@ -102,7 +120,7 @@ func StreamSSE[Req any](
 				errs <- err
 				return
 			}
-			if attempt >= c.retry {
+			if attempt >= reconnectLimit {
 				errs <- err
 				return
 			}
@@ -125,13 +143,14 @@ func StreamSSE[Req any](
 				}
 				return
 			}
-			resp, err = c.openStream(ctx, base, rt.Spec(), req, options, endpoint.KindSSE, "text/event-stream", lastID)
-			if err != nil {
+			next, openErr := c.openStream(ctx, base, rt.Spec(), req, options, endpoint.KindSSE, "text/event-stream", lastID)
+			if openErr != nil {
 				if ctx.Err() == nil {
-					errs <- err
+					errs <- openErr
 				}
 				return
 			}
+			resp, err, latest = next, nil, next
 		}
 	}()
 	return events, errs, nil
