@@ -82,6 +82,17 @@ func (c *buildContext) schemaFor(t reflect.Type) (map[string]any, error) {
 		return schema, nil
 	}
 
+	// Widths that depend on the platform are documented as 32-bit. int and uint
+	// are 64-bit on the platforms gofy targets, but every contract field using
+	// them today (envelope codes, paging numbers) fits in 32 bits, and int32 is
+	// the type client generators handle without surprises. A contract that
+	// needs the full range must say int64 explicitly; there is no automatic
+	// widening here, because the document has to describe the wire contract,
+	// not the host word size.
+	// 与平台相关的宽度统一按 32 位描述。gofy 目标平台上的 int/uint 是 64 位，但现有
+	// 使用它们的契约字段（响应码、分页数字）都在 32 位内，而 int32 是客户端生成器处理
+	// 起来最不会有意外的类型。需要完整范围时应由契约显式声明 int64；这里不做自动放宽，
+	// 因为文档描述的是线上契约，而不是宿主字长。
 	switch t.Kind() {
 	case reflect.String:
 		return map[string]any{"type": "string"}, nil
@@ -286,6 +297,16 @@ func applyConstraints(schema map[string]any, t reflect.Type, validate string) {
 	if validate == "" {
 		return
 	}
+	// Constraints describe the element, not the pointer: min on *string is a
+	// minLength exactly like it is on string. enumFor and parseScalar already
+	// dereference; this path was the one that forgot, so *string produced a
+	// numeric minimum instead.
+	// 约束描述的是元素而不是指针：*string 上的 min 与 string 上一样是 minLength。
+	// enumFor 与 parseScalar 都已解引用，只有这条路径漏了，导致 *string 生成数字
+	// minimum。
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
 	isString := t.Kind() == reflect.String
 	isArray := t.Kind() == reflect.Slice || t.Kind() == reflect.Array
 	for _, rule := range strings.Split(validate, ",") {
@@ -300,7 +321,7 @@ func applyConstraints(schema map[string]any, t reflect.Type, validate string) {
 			continue
 		}
 		switch key {
-		case "min", "gte", "gt":
+		case "min", "gte":
 			if isArray {
 				if n, err := strconv.Atoi(value); err == nil {
 					schema["minItems"] = n
@@ -312,7 +333,25 @@ func applyConstraints(schema map[string]any, t reflect.Type, validate string) {
 			} else if n, err := strconv.ParseFloat(value, 64); err == nil {
 				schema["minimum"] = n
 			}
-		case "max", "lte", "lt":
+		case "gt":
+			// validator's gt is exclusive. OpenAPI 3.0 spells that as
+			// minimum + exclusiveMinimum for numbers; strings and arrays have no
+			// exclusive counterpart, so the closed bound shifts by one.
+			// validator 的 gt 是排他的。OpenAPI 3.0 对数字写成 minimum +
+			// exclusiveMinimum；字符串与数组没有排他关键字，闭区间因此平移一。
+			if isArray {
+				if n, err := strconv.Atoi(value); err == nil {
+					schema["minItems"] = n + 1
+				}
+			} else if isString {
+				if n, err := strconv.Atoi(value); err == nil {
+					schema["minLength"] = n + 1
+				}
+			} else if n, err := strconv.ParseFloat(value, 64); err == nil {
+				schema["minimum"] = n
+				schema["exclusiveMinimum"] = true
+			}
+		case "max", "lte":
 			if isArray {
 				if n, err := strconv.Atoi(value); err == nil {
 					schema["maxItems"] = n
@@ -323,6 +362,24 @@ func applyConstraints(schema map[string]any, t reflect.Type, validate string) {
 				}
 			} else if n, err := strconv.ParseFloat(value, 64); err == nil {
 				schema["maximum"] = n
+			}
+		case "lt":
+			// Same shift as gt. A bound below zero describes a value that can
+			// never exist; emitting a negative maxLength/maxItems would be
+			// invalid, so the constraint is left out instead.
+			// 与 gt 同样的平移。小于零的边界描述的是不可能存在的值；写出负的
+			// maxLength/maxItems 是非法的，因此这里不生成约束。
+			if isArray {
+				if n, err := strconv.Atoi(value); err == nil && n > 0 {
+					schema["maxItems"] = n - 1
+				}
+			} else if isString {
+				if n, err := strconv.Atoi(value); err == nil && n > 0 {
+					schema["maxLength"] = n - 1
+				}
+			} else if n, err := strconv.ParseFloat(value, 64); err == nil {
+				schema["maximum"] = n
+				schema["exclusiveMaximum"] = true
 			}
 		case "minlength":
 			if n, err := strconv.Atoi(value); err == nil {

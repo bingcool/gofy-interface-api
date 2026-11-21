@@ -31,6 +31,13 @@ gofy  <--require--  gofy-adapter  --require-->  gofy-interface-api  <--require--
 CLI `-prefix` 覆盖因此继续可用；`gofy-adapter` 的 `BindGroup` 在启动期断言
 stamped 前缀与分组一致。
 
+## 整数宽度
+
+`docgen` 把 `int` / `uint` 记为 OpenAPI 的 `int32`。它们在 64 位平台上是 64 位，
+但契约里用这类字段的地方（响应码、分页页码与页大小）都在 32 位范围内，`int32` 也是
+客户端生成器处理起来最不会有意外的类型。需要完整 64 位范围时在契约里显式写
+`int64` / `uint64`，生成器照实输出；不会按宿主字长自动放宽。
+
 ## 必填字段
 
 `endpoint.FieldRequired` 是 OpenAPI `required` 与客户端编码器的唯一判定源：

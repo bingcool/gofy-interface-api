@@ -283,6 +283,13 @@ func readEvents(ctx context.Context, body io.Reader, out chan<- Event, lastID st
 	)
 	dispatch := func() bool {
 		if !hasData && event == "" {
+			// A heartbeat/comment-only block has nothing to emit, but the bytes
+			// it accumulated must not carry into the next block: a long-lived
+			// stream sends them forever and would eventually look like one
+			// oversized event.
+			// 仅含心跳/注释的块没有内容要发出，但它累计的字节不能带进下一个块：长连接会
+			// 一直发送它们，最终看起来像一个超大事件。
+			event, data, retry, hasData, eventBytes = "", nil, 0, false, 0
 			return true
 		}
 		ev := Event{Event: event, ID: lastID, Retry: retry}
@@ -376,7 +383,21 @@ func readLine(r *bufio.Reader, max int64) (string, error) {
 	var line []byte
 	for {
 		frag, err := r.ReadSlice('\n')
-		if int64(len(line))+int64(len(frag)) > max {
+		// The cap counts content, not the terminator. The event-level check
+		// trims "\r\n" before adding up, so a line whose content is exactly
+		// max bytes has to pass here too; counting the newline rejected it
+		// first and reported an oversized event that was never oversized.
+		// 上限只算内容，不算行终止符。事件级检查先去掉 "\r\n" 再累加，因此内容恰好
+		// 等于 max 的行在这里也必须通过；把换行算进去会先把它拒掉，报出一个根本不
+		// 超限的事件。
+		content := frag
+		if n := len(content); n > 0 && content[n-1] == '\n' {
+			content = content[:n-1]
+			if m := len(content); m > 0 && content[m-1] == '\r' {
+				content = content[:m-1]
+			}
+		}
+		if int64(len(line))+int64(len(content)) > max {
 			return "", fmt.Errorf("%w: line over %d bytes", ErrEventTooLarge, max)
 		}
 		line = append(line, frag...)
