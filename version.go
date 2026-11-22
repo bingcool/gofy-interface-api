@@ -14,4 +14,4 @@ package interfaceapi
 // version cannot drift apart.
 // Version 是 gofy-interface-api 模块版本，也是它唯一的定义处：client.Version 读取这个
 // 常量，因此 User-Agent 与模块版本不会各自漂移。
-const Version = "1.0.0"
+const Version = "0.8.0"
